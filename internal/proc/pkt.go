@@ -1,51 +1,82 @@
 package proc
 
 import (
-	"context"
-	"sync"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 )
 
-type Client struct {
-	cli ConnectionAdapterClient
-	buf []byte
-	mut sync.Mutex
+const (
+	Stamp = "11.06.2005 23_59_59.999"
+)
+
+const (
+	PUB = iota
+	SUB = iota
+	USB = iota
+	GET = iota
+)
+
+type Time struct {
+	time.Time
 }
 
-func NewClient(cli ConnectionAdapterClient) *Client {
-	return &Client{
-		cli: cli,
-		buf: make([]byte, 0, 0xff),
+func (t *Time) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.FormatInt(t.UnixMilli(), 10)), nil
+}
+
+func (t *Time) UnmarshalJSON(json []byte) error {
+	milli, err := strconv.ParseInt(string(json), 10, 64)
+
+	if err != nil {
+		return err
 	}
+
+	t.Time = time.UnixMilli(milli)
+
+	return nil
 }
 
-func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
-	c.mut.Lock()
-	defer c.mut.Unlock()
+type Record struct {
+	Value string `json:"value"`
+	Stamp Time   `json:"timestamp"`
+}
 
-	for _, b := range msg {
-		if b == 10 {
-			c.parseBytes()
+type Event struct {
+	Topic  string
+	Method int
 
-			if cap(c.buf) > 0xff {
-				c.buf = make([]byte, 0, 0xff)
-			} else {
-				c.buf = c.buf[:0]
-			}
+	Record
+}
+
+func (e *Event) Decode(in []byte) error {
+	tok := strings.Split(string(in), "|")
+
+	for _, t := range tok {
+		tok := strings.Split(t, ":")
+
+		if len(tok) != 2 {
+			continue
 		}
 
-		c.buf = append(c.buf, b)
+		switch tok[0] {
+		case "n":
+		case "name":
+			e.Topic = tok[1]
+		case "time":
+		}
 	}
+
+	return nil
 }
 
-func (c *Client) parseBytes() {
-}
+func (e *Event) Encode() ([]byte, error) {
+	msg := fmt.Sprintf("time:%v|name:%v|descr:-|units:-|type:rw|val:%v\n",
+		e.Stamp.Format(Stamp),
+		e.Topic,
+		e.Value,
+	)
 
-func (c *Client) OnTimerTimeout(ctx context.Context, ttp TimerType) {
-	c.mut.Lock()
-	defer c.mut.Unlock()
-}
-
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *Message) {
-	c.mut.Lock()
-	defer c.mut.Unlock()
+	return []byte(msg), nil
 }

@@ -5,17 +5,20 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"go.uber.org/zap"
 )
 
 var storage InMemStorage
 
 type service struct {
-	cli ConnectionAdapterClient
+	cac ConnectionAdapterClient
+	log *zap.Logger
 
 	UnimplementedConnectionUnaryHandlerServer
 }
 
-func NewService(uri string) (ConnectionUnaryHandlerServer, error) {
+func NewService(uri string, log *zap.Logger) (ConnectionUnaryHandlerServer, error) {
 	crd := insecure.NewCredentials()
 	cli, err := grpc.NewClient(uri, grpc.WithTransportCredentials(crd))
 
@@ -23,11 +26,14 @@ func NewService(uri string) (ConnectionUnaryHandlerServer, error) {
 		return nil, err
 	}
 
-	return &service{cli: NewConnectionAdapterClient(cli)}, nil
+	return &service{
+		cac: NewConnectionAdapterClient(cli),
+		log: log,
+	}, nil
 }
 
 func (s *service) OnSocketCreated(_ context.Context, req *SocketCreatedRequest) (*EmptySuccess, error) {
-	storage.Set(req.GetConn(), NewClient(s.cli))
+	storage.Set(req.GetConn(), NewClient(req.GetConn(), s.cac, s.log))
 
 	return nil, nil
 }

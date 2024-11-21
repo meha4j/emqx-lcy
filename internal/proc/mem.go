@@ -3,22 +3,22 @@ package proc
 import "sync"
 
 type InMemStorage struct {
-	dat map[string]*Client
-	mut sync.RWMutex
+	data map[string]*Client
+	mutx sync.RWMutex
 }
 
 func (s *InMemStorage) Get(conn string) (*Client, bool) {
-	s.mut.RLock()
-	defer s.mut.RUnlock()
+	s.mutx.RLock()
+	defer s.mutx.RUnlock()
 
-	cli, ok := s.dat[conn]
+	cli, ok := s.data[conn]
 
 	return cli, ok
 }
 
 func (s *InMemStorage) Set(conn string, cli *Client) {
-	s.mut.Lock()
-	defer s.mut.Unlock()
+	s.mutx.Lock()
+	defer s.mutx.Unlock()
 
-	s.dat[conn] = cli
+	s.data[conn] = cli
 }
