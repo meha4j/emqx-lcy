@@ -1,20 +1,29 @@
 networks:
-  emqx:
+  mqtt:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
 
 services:
   emqx:
     image: emqx/emqx
     ports:
+      - "9110:9110"
       - "1883:1883"
       - "18083:18083"
+      - "20041:20041"
     networks:
-      - emqx
+      mqtt:
+        ipv4_address: 10.5.0.5
 
-  proc:
-    image: emqx-lcy-proc
+  ext:
+    image: emqx-ext
     ports:
       - "9111:9111"
+    environment:
+      EMQX_EXT_PROC_CLI_ADDR: "10.5.0.1:9110"
     networks:
-      - emqx
+      mqtt:
+        ipv4_address: 10.5.0.6
 

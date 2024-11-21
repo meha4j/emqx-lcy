@@ -1,4 +1,4 @@
-module github.com/meha4j/emqx-lcy
+module github.com/meha4j/extd
 
 go 1.23.3
 
