@@ -9,20 +9,21 @@ import (
 )
 
 type Client struct {
-	log *zap.Logger
-	cac ConnectionAdapterClient
-
 	conn string
 	buff []byte
 	mutx sync.Mutex
+
+	adapter ConnectionAdapterClient
+	log     *zap.Logger
 }
 
-func NewClient(conn string, cac ConnectionAdapterClient, log *zap.Logger) *Client {
+func NewClient(conn string, adapter ConnectionAdapterClient, log *zap.Logger) *Client {
 	return &Client{
-		log:  log,
-		cac:  cac,
 		conn: conn,
 		buff: make([]byte, 0, 0xff),
+
+		adapter: adapter,
+		log:     log,
 	}
 }
 
@@ -36,10 +37,10 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
 			continue
 		}
 
-		err := c.processEvent(ctx)
+		err := c.execute(ctx)
 
 		if err != nil {
-			c.log.Error("An error occurred while processing event.", zap.Error(err))
+			c.log.Error("An error occurred while executing command.", zap.Error(err))
 		}
 
 		if cap(c.buff) > 0xff {
@@ -50,39 +51,39 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
 	}
 }
 
-func (c *Client) processEvent(ctx context.Context) error {
-	var event Event
+func (c *Client) execute(ctx context.Context) error {
+	var cmd Command
 
-	err := event.Decode(c.buff)
+	err := cmd.Decode(c.buff)
 
 	if err != nil {
 		return err
 	}
 
-	switch event.Method {
+	switch cmd.Method {
 	case PUB:
-		return c.processPublish(ctx, &event)
+		return c.publish(ctx, &cmd)
 	case SUB:
-		return c.processSubscribe(ctx, &event)
+		return c.subscribe(ctx, &cmd)
 	case USB:
-		return c.processUnsubscribe(ctx, &event)
+		return c.unsubscribe(ctx, &cmd)
 	case GET:
-		return c.processGet(ctx, &event)
+		return c.get(ctx, &cmd)
 	default:
 		panic("Must be already aborted.")
 	}
 }
 
-func (c *Client) processPublish(ctx context.Context, event *Event) error {
-	pay, err := json.Marshal(event.Record)
+func (c *Client) publish(ctx context.Context, cmd *Command) error {
+	pay, err := json.Marshal(&cmd.Record)
 
 	if err != nil {
 		return err
 	}
 
-	_, err = c.cac.Publish(ctx, &PublishRequest{
+	_, err = c.adapter.Publish(ctx, &PublishRequest{
 		Conn:    c.conn,
-		Topic:   event.Topic,
+		Topic:   cmd.Topic,
 		Qos:     0,
 		Payload: pay,
 	})
@@ -90,33 +91,33 @@ func (c *Client) processPublish(ctx context.Context, event *Event) error {
 	return err
 }
 
-func (c *Client) processSubscribe(ctx context.Context, event *Event) error {
-	_, err := c.cac.Subscribe(ctx, &SubscribeRequest{
+func (c *Client) subscribe(ctx context.Context, cmd *Command) error {
+	_, err := c.adapter.Subscribe(ctx, &SubscribeRequest{
 		Conn:  c.conn,
-		Topic: event.Topic,
+		Topic: cmd.Topic,
 		Qos:   2,
 	})
 
 	return err
 }
 
-func (c *Client) processUnsubscribe(ctx context.Context, event *Event) error {
-	_, err := c.cac.Unsubscribe(ctx, &UnsubscribeRequest{
+func (c *Client) unsubscribe(ctx context.Context, cmd *Command) error {
+	_, err := c.adapter.Unsubscribe(ctx, &UnsubscribeRequest{
 		Conn:  c.conn,
-		Topic: event.Topic,
+		Topic: cmd.Topic,
 	})
 
 	return err
 }
 
-func (c *Client) processGet(ctx context.Context, event *Event) error {
-	err := c.processSubscribe(ctx, event)
+func (c *Client) get(ctx context.Context, cmd *Command) error {
+	err := c.subscribe(ctx, cmd)
 
 	if err != nil {
 		return err
 	}
 
-	return c.processUnsubscribe(ctx, event)
+	return c.unsubscribe(ctx, cmd)
 }
 
 func (c *Client) OnTimerTimeout(ctx context.Context, ttp TimerType) {}
@@ -125,33 +126,32 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *Message) {
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
 
-	event, err := c.encodeMessage(msg)
+	cmd, err := c.encodeMessage(msg)
 
 	if err != nil {
-		c.log.Error("An error occurred while encoding EMQX message.", zap.Error(err))
+		c.log.Error("An error occurred while encoding message.", zap.Error(err))
 	}
 
-	_, err = c.cac.Send(ctx, &SendBytesRequest{
+	_, err = c.adapter.Send(ctx, &SendBytesRequest{
 		Conn:  c.conn,
-		Bytes: event,
+		Bytes: cmd,
 	})
 
 	if err != nil {
-		c.log.Error("An error occurred while sending event.", zap.Error(err))
+		c.log.Error("An error occurred while sending command.", zap.Error(err))
 	}
 }
 
 func (c *Client) encodeMessage(msg *Message) ([]byte, error) {
-	event := Event{
-		Topic:  msg.GetTopic(),
-		Method: PUB,
+	cmd := Command{
+		Topic: msg.GetTopic(),
 	}
 
-	err := json.Unmarshal(msg.GetPayload(), &event.Record)
+	err := json.Unmarshal(msg.GetPayload(), &cmd.Record)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return event.Encode()
+	return cmd.Encode()
 }

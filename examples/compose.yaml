@@ -7,7 +7,7 @@ networks:
 
 services:
   emqx:
-    image: emqx/emqx
+    image: ghcr.io/blabtm/emqx:latest
     ports:
       - "9110:9110"
       - "1883:1883"
@@ -17,12 +17,13 @@ services:
       mqtt:
         ipv4_address: 10.5.0.5
 
-  ext:
-    image: emqx-ext
+  extd:
+    image: ghcr.io/blabtm/extd:latest
     ports:
       - "9111:9111"
     environment:
-      EMQX_EXT_PROC_CLI_ADDR: "10.5.0.1:9110"
+      EXTD_PORT: 9111
+      EXTD_PROC_ADAPTER_ADDR: 10.5.0.5:9110
     networks:
       mqtt:
         ipv4_address: 10.5.0.6

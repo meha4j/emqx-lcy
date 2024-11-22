@@ -7,8 +7,12 @@ import (
 	"time"
 )
 
+var (
+	Location *time.Location
+)
+
 const (
-	Stamp = "11.06.2005 23_59_59.999"
+	Stamp = "02.01.2006 15_04_05.000"
 )
 
 const (
@@ -17,6 +21,16 @@ const (
 	USB = iota
 	GET = iota
 )
+
+func init() {
+	loc, err := time.LoadLocation("Asia/Novosibirsk")
+
+	if err != nil {
+		panic(err)
+	}
+
+	Location = loc
+}
 
 type Time struct {
 	time.Time
@@ -33,24 +47,27 @@ func (t *Time) UnmarshalJSON(json []byte) error {
 		return err
 	}
 
-	t.Time = time.UnixMilli(milli)
+	t.Time = time.UnixMilli(milli).In(Location)
 
 	return nil
 }
 
 type Record struct {
-	Value string `json:"value"`
+	Value string `json:"value,omitempty"`
 	Stamp Time   `json:"timestamp"`
 }
 
-type Event struct {
+type Command struct {
 	Topic  string
 	Method int
 
 	Record
 }
 
-func (e *Event) Decode(in []byte) error {
+func (cmd *Command) Decode(in []byte) error {
+	cmd.Stamp.Time = time.Now().In(Location)
+	cmd.Method = -1
+
 	tok := strings.Split(string(in), "|")
 
 	for _, t := range tok {
@@ -61,21 +78,56 @@ func (e *Event) Decode(in []byte) error {
 		}
 
 		switch tok[0] {
-		case "n":
-		case "name":
-			e.Topic = tok[1]
-		case "time":
+		case "n", "name":
+			cmd.Topic = tok[1]
+		case "v", "val", "value":
+			cmd.Value = tok[1]
+		case "t", "time":
+			tm, err := time.ParseInLocation(Stamp, tok[1], Location)
+
+			if err != nil {
+				return err
+			}
+
+			cmd.Stamp.Time = tm
+		case "m", "meth", "method":
+			switch tok[1] {
+			case "sb", "sub", "subscr", "subscribe":
+				cmd.Method = SUB
+			case "s", "set":
+				cmd.Method = PUB
+			case "f", "ref", "free", "release":
+				cmd.Method = USB
+			case "g", "gf", "get", "getfull":
+				cmd.Method = GET
+			default:
+				return fmt.Errorf("Malformed packet: method unknown: %v.", tok[1])
+			}
 		}
+	}
+
+	if cmd.Method == -1 {
+		return fmt.Errorf("Malformed packet: method not found.")
+	}
+
+	if cmd.Topic == "" {
+		return fmt.Errorf("Malformed packet: topic not found.")
 	}
 
 	return nil
 }
 
-func (e *Event) Encode() ([]byte, error) {
+func (cmd *Command) Encode() ([]byte, error) {
+	value := "none"
+
+	if cmd.Value != "" {
+		value = cmd.Value
+	}
+
 	msg := fmt.Sprintf("time:%v|name:%v|descr:-|units:-|type:rw|val:%v\n",
-		e.Stamp.Format(Stamp),
-		e.Topic,
-		e.Value,
+		cmd.Stamp.Format(Stamp),
+		cmd.Topic,
+		value,
 	)
 
 	return []byte(msg), nil

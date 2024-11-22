@@ -2,30 +2,46 @@ package auth
 
 import (
 	context "context"
-	"log"
+
+	"go.uber.org/zap"
 )
 
 type service struct {
+	log *zap.Logger
+
 	UnimplementedHookProviderServer
 }
 
-func NewService() HookProviderServer {
-	return &service{}
+func NewService(log *zap.Logger) HookProviderServer {
+	return &service{
+		log: log,
+	}
 }
 
-func (*service) OnProviderLoaded(context.Context, *ProviderLoadedRequest) (*LoadedResponse, error) {
+func (s *service) OnProviderLoaded(context.Context, *ProviderLoadedRequest) (*LoadedResponse, error) {
+	s.log.Info("Loaded. Development setup.")
+
+	return &LoadedResponse{
+		Hooks: []*HookSpec{
+			{
+				Name:   "message.publish",
+				Topics: []string{"test"},
+			},
+		},
+	}, nil
+}
+
+func (s *service) OnProviderUnloaded(context.Context, *ProviderUnloadedRequest) (*EmptySuccess, error) {
+	s.log.Info("Unloded. Development setup.")
+
 	return nil, nil
 }
 
-func (*service) OnProviderUnloaded(context.Context, *ProviderUnloadedRequest) (*EmptySuccess, error) {
-	return nil, nil
-}
-
-func (*service) OnClientAuthorize(_ context.Context, req *ClientAuthorizeRequest) (*ValuedResponse, error) {
-	log.Println(req)
+func (s *service) OnClientAuthorize(_ context.Context, req *ClientAuthorizeRequest) (*ValuedResponse, error) {
+	s.log.Info("Authorization request.", zap.String("topic", req.GetTopic()))
 
 	return &ValuedResponse{
-		Type: ValuedResponse_STOP_AND_RETURN,
+		Type: ValuedResponse_CONTINUE,
 		Value: &ValuedResponse_BoolResult{
 			BoolResult: true,
 		},

@@ -9,16 +9,12 @@ import (
 	"go.uber.org/zap"
 )
 
-var storage InMemStorage
+const (
+	PROTO_NAME    = "VCAS"
+	PROTO_VERSION = "FINAL"
+)
 
-type service struct {
-	cac ConnectionAdapterClient
-	log *zap.Logger
-
-	UnimplementedConnectionUnaryHandlerServer
-}
-
-func NewService(uri string, log *zap.Logger) (ConnectionUnaryHandlerServer, error) {
+func NewAdapter(uri string) (ConnectionAdapterClient, error) {
 	crd := insecure.NewCredentials()
 	cli, err := grpc.NewClient(uri, grpc.WithTransportCredentials(crd))
 
@@ -26,29 +22,72 @@ func NewService(uri string, log *zap.Logger) (ConnectionUnaryHandlerServer, erro
 		return nil, err
 	}
 
-	return &service{
-		cac: NewConnectionAdapterClient(cli),
-		log: log,
-	}, nil
+	return NewConnectionAdapterClient(cli), nil
 }
 
-func (s *service) OnSocketCreated(_ context.Context, req *SocketCreatedRequest) (*EmptySuccess, error) {
-	storage.Set(req.GetConn(), NewClient(req.GetConn(), s.cac, s.log))
+type Storage interface {
+	GetClient(conn string) (*Client, bool)
+	SetClient(conn string, cli *Client)
+}
+
+type service struct {
+	storage Storage
+	adapter ConnectionAdapterClient
+	log     *zap.Logger
+
+	UnimplementedConnectionUnaryHandlerServer
+}
+
+func NewService(storage Storage, adapter ConnectionAdapterClient, log *zap.Logger) ConnectionUnaryHandlerServer {
+	return &service{
+		storage: storage,
+		adapter: adapter,
+		log:     log,
+	}
+}
+
+func (s *service) OnSocketCreated(ctx context.Context, req *SocketCreatedRequest) (*EmptySuccess, error) {
+	_, err := s.adapter.Authenticate(ctx, &AuthenticateRequest{
+		Conn: req.GetConn(),
+		Clientinfo: &ClientInfo{
+			ProtoName: PROTO_NAME,
+			ProtoVer:  PROTO_VERSION,
+			Clientid:  req.GetConn(),
+		},
+	})
+
+	if err != nil {
+		s.log.Error("Authentication error.", zap.Error(err))
+
+		_, err := s.adapter.Close(ctx, &CloseSocketRequest{
+			Conn: req.Conn,
+		})
+
+		if err != nil {
+			s.log.Error("Termination error.", zap.Error(err))
+		}
+
+		return nil, nil
+	}
+
+	s.log.Info("New connection.", zap.String("conn", req.GetConn()))
+	s.storage.SetClient(req.GetConn(), NewClient(req.GetConn(), s.adapter, s.log))
 
 	return nil, nil
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *SocketClosedRequest) (*EmptySuccess, error) {
-	storage.Set(req.GetConn(), nil)
+	s.log.Info("Connection closed.", zap.String("conn", req.GetConn()))
+	s.storage.SetClient(req.GetConn(), nil)
 
 	return nil, nil
 }
 
 func (s *service) OnReceivedBytes(ctx context.Context, req *ReceivedBytesRequest) (*EmptySuccess, error) {
-	cli, ok := storage.Get(req.GetConn())
+	cli, ok := s.storage.GetClient(req.GetConn())
 
 	if !ok {
-		panic("Client supposed to be exists.")
+		return nil, nil
 	}
 
 	cli.OnReceivedBytes(ctx, req.GetBytes())
@@ -57,10 +96,10 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *ReceivedBytesRequest
 }
 
 func (s *service) OnTimerTimeout(ctx context.Context, req *TimerTimeoutRequest) (*EmptySuccess, error) {
-	cli, ok := storage.Get(req.GetConn())
+	cli, ok := s.storage.GetClient(req.GetConn())
 
 	if !ok {
-		panic("Client supposed to be exists.")
+		return nil, nil
 	}
 
 	cli.OnTimerTimeout(ctx, req.GetType())
@@ -69,10 +108,10 @@ func (s *service) OnTimerTimeout(ctx context.Context, req *TimerTimeoutRequest) 
 }
 
 func (s *service) OnReceivedMessages(ctx context.Context, req *ReceivedMessagesRequest) (*EmptySuccess, error) {
-	cli, ok := storage.Get(req.GetConn())
+	cli, ok := s.storage.GetClient(req.GetConn())
 
 	if !ok {
-		panic("Client supposed to be exists.")
+		return nil, nil
 	}
 
 	for _, msg := range req.GetMessages() {
