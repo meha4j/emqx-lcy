@@ -13,13 +13,11 @@ var (
 
 const (
 	Stamp = "02.01.2006 15_04_05.000"
-)
 
-const (
-	PUB = iota
-	SUB = iota
-	USB = iota
-	GET = iota
+	PUB = iota + 1
+	SUB
+	USB
+	GET
 )
 
 func init() {
@@ -36,25 +34,49 @@ type Time struct {
 	time.Time
 }
 
-func (t *Time) MarshalJSON() ([]byte, error) {
+func (t *Time) Now() {
+	t.Time = time.Now().In(Location)
+}
+
+func (t *Time) Set(milli int64) {
+	t.Time = time.UnixMilli(milli).In(Location)
+}
+
+func (t *Time) Parse(value string) error {
+	res, err := time.ParseInLocation(Stamp, value, Location)
+
+	if err != nil {
+		return err
+	}
+
+	t.Time = res
+
+	return nil
+}
+
+func (t *Time) Format() string {
+	return t.Time.Format(Stamp)
+}
+
+func (t Time) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.FormatInt(t.UnixMilli(), 10)), nil
 }
 
-func (t *Time) UnmarshalJSON(json []byte) error {
+func (t Time) UnmarshalJSON(json []byte) error {
 	milli, err := strconv.ParseInt(string(json), 10, 64)
 
 	if err != nil {
 		return err
 	}
 
-	t.Time = time.UnixMilli(milli).In(Location)
+	t.Set(milli)
 
 	return nil
 }
 
 type Record struct {
-	Value string `json:"value,omitempty"`
-	Stamp Time   `json:"timestamp"`
+	Value     string `json:"value,omitempty"`
+	Timestamp Time   `json:"timestamp"`
 }
 
 type Command struct {
@@ -65,38 +87,37 @@ type Command struct {
 }
 
 func (cmd *Command) Decode(in []byte) error {
-	cmd.Stamp.Time = time.Now().In(Location)
-	cmd.Method = -1
+	cmd.Topic = ""
+	cmd.Method = 0
+	cmd.Timestamp.Now()
 
 	tok := strings.Split(string(in), "|")
 
 	for _, t := range tok {
-		tok := strings.Split(t, ":")
+		tok := strings.SplitN(t, ":", 2)
 
 		if len(tok) != 2 {
 			continue
 		}
 
 		switch tok[0] {
-		case "n", "name":
+		case "n", "nm", "name":
 			cmd.Topic = tok[1]
 		case "v", "val", "value":
 			cmd.Value = tok[1]
-		case "t", "time":
-			tm, err := time.ParseInLocation(Stamp, tok[1], Location)
+		case "t", "tm", "time":
+			err := cmd.Timestamp.Parse(tok[1])
 
 			if err != nil {
 				return err
 			}
-
-			cmd.Stamp.Time = tm
 		case "m", "meth", "method":
 			switch tok[1] {
 			case "sb", "sub", "subscr", "subscribe":
 				cmd.Method = SUB
-			case "s", "set":
+			case "s", "pub", "set", "publish":
 				cmd.Method = PUB
-			case "f", "ref", "free", "release":
+			case "f", "rel", "free", "release":
 				cmd.Method = USB
 			case "g", "gf", "get", "getfull":
 				cmd.Method = GET
@@ -106,7 +127,7 @@ func (cmd *Command) Decode(in []byte) error {
 		}
 	}
 
-	if cmd.Method == -1 {
+	if cmd.Method == 0 {
 		return fmt.Errorf("Malformed packet: method not found.")
 	}
 
@@ -125,7 +146,7 @@ func (cmd *Command) Encode() ([]byte, error) {
 	}
 
 	msg := fmt.Sprintf("time:%v|name:%v|descr:-|units:-|type:rw|val:%v\n",
-		cmd.Stamp.Format(Stamp),
+		cmd.Timestamp.Format(),
 		cmd.Topic,
 		value,
 	)

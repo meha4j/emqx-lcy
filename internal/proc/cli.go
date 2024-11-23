@@ -3,58 +3,69 @@ package proc
 import (
 	context "context"
 	"encoding/json"
+	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
 
-type Client struct {
-	conn string
-	buff []byte
-	mutx sync.Mutex
+const (
+	ERR = "Runtime error."
+)
 
-	adapter ConnectionAdapterClient
-	log     *zap.Logger
+type Client struct {
+	buf []byte
+	obs string
+	mut sync.Mutex
+
+	Conn    string
+	Adapter ConnectionAdapterClient
+	Log     *zap.Logger
 }
 
 func NewClient(conn string, adapter ConnectionAdapterClient, log *zap.Logger) *Client {
 	return &Client{
-		conn: conn,
-		buff: make([]byte, 0, 0xff),
+		buf: make([]byte, 0, 0xff),
 
-		adapter: adapter,
-		log:     log,
+		Conn:    conn,
+		Adapter: adapter,
+		Log:     log,
 	}
 }
 
 func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
-	c.mutx.Lock()
-	defer c.mutx.Unlock()
+	c.mut.Lock()
+	defer c.mut.Unlock()
 
 	for _, b := range msg {
 		if b != 10 {
-			c.buff = append(c.buff, b)
+			c.buf = append(c.buf, b)
 			continue
 		}
 
-		err := c.execute(ctx)
+		err := c.exec(ctx)
 
 		if err != nil {
-			c.log.Error("An error occurred while executing command.", zap.Error(err))
+			c.Log.Error(ERR, zap.Error(err))
 		}
 
-		if cap(c.buff) > 0xff {
-			c.buff = make([]byte, 0, 0xff)
+		if cap(c.buf) > 0xff {
+			c.buf = make([]byte, 0, 0xff)
 		} else {
-			c.buff = c.buff[:0]
+			c.buf = c.buf[:0]
 		}
 	}
 }
 
-func (c *Client) execute(ctx context.Context) error {
+func (c *Client) exec(ctx context.Context) error {
+	if c.obs != "" {
+		return nil
+	}
+
 	var cmd Command
 
-	err := cmd.Decode(c.buff)
+	err := cmd.Decode(c.buf)
 
 	if err != nil {
 		return err
@@ -81,33 +92,57 @@ func (c *Client) publish(ctx context.Context, cmd *Command) error {
 		return err
 	}
 
-	_, err = c.adapter.Publish(ctx, &PublishRequest{
-		Conn:    c.conn,
+	res, err := c.Adapter.Publish(ctx, &PublishRequest{
+		Conn:    c.Conn,
 		Topic:   cmd.Topic,
 		Qos:     0,
 		Payload: pay,
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		return fmt.Errorf(res.GetMessage())
+	}
+
+	return nil
 }
 
 func (c *Client) subscribe(ctx context.Context, cmd *Command) error {
-	_, err := c.adapter.Subscribe(ctx, &SubscribeRequest{
-		Conn:  c.conn,
+	res, err := c.Adapter.Subscribe(ctx, &SubscribeRequest{
+		Conn:  c.Conn,
 		Topic: cmd.Topic,
 		Qos:   2,
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		return fmt.Errorf(res.GetMessage())
+	}
+
+	return nil
 }
 
 func (c *Client) unsubscribe(ctx context.Context, cmd *Command) error {
-	_, err := c.adapter.Unsubscribe(ctx, &UnsubscribeRequest{
-		Conn:  c.conn,
+	res, err := c.Adapter.Unsubscribe(ctx, &UnsubscribeRequest{
+		Conn:  c.Conn,
 		Topic: cmd.Topic,
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		return fmt.Errorf(res.GetMessage())
+	}
+
+	return nil
 }
 
 func (c *Client) get(ctx context.Context, cmd *Command) error {
@@ -117,28 +152,69 @@ func (c *Client) get(ctx context.Context, cmd *Command) error {
 		return err
 	}
 
-	return c.unsubscribe(ctx, cmd)
+	time.AfterFunc(5*time.Second, func() {
+		c.mut.Lock()
+		defer c.mut.Unlock()
+
+		if c.obs != "" {
+			var empty Command
+
+			empty.Topic = cmd.Topic
+			empty.Timestamp.Now()
+
+			enc, _ := empty.Encode()
+			res, err := c.Adapter.Send(ctx, &SendBytesRequest{
+				Conn:  c.Conn,
+				Bytes: enc,
+			})
+
+			if err != nil {
+				c.Log.Error(ERR, zap.Error(err))
+			}
+
+			if res.GetCode() != ResultCode_SUCCESS {
+				c.Log.Error(ERR, zap.String("error", res.GetMessage()))
+			}
+
+			c.obs = ""
+			err = c.unsubscribe(ctx, cmd)
+
+			if err != nil {
+				c.Log.Error(ERR, zap.Error(err))
+			}
+		}
+	})
+
+	return nil
 }
 
 func (c *Client) OnTimerTimeout(ctx context.Context, ttp TimerType) {}
 
 func (c *Client) OnReceivedMessage(ctx context.Context, msg *Message) {
-	c.mutx.Lock()
-	defer c.mutx.Unlock()
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	if c.obs != "" {
+		if c.obs != msg.GetTopic() {
+			return
+		}
+
+		c.obs = ""
+	}
 
 	cmd, err := c.encodeMessage(msg)
 
 	if err != nil {
-		c.log.Error("An error occurred while encoding message.", zap.Error(err))
+		c.Log.Error("An error occurred while encoding message.", zap.Error(err))
 	}
 
-	_, err = c.adapter.Send(ctx, &SendBytesRequest{
-		Conn:  c.conn,
+	_, err = c.Adapter.Send(ctx, &SendBytesRequest{
+		Conn:  c.Conn,
 		Bytes: cmd,
 	})
 
 	if err != nil {
-		c.log.Error("An error occurred while sending command.", zap.Error(err))
+		c.Log.Error("An error occurred while sending command.", zap.Error(err))
 	}
 }
 
