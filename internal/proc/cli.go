@@ -10,27 +10,25 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	ERR = "Runtime error."
-)
-
 type Client struct {
 	buf []byte
 	obs string
 	mut sync.Mutex
+	cli ConnectionAdapterClient
 
-	Conn    string
-	Adapter ConnectionAdapterClient
-	Log     *zap.Logger
+	Conn string
+	Log  *zap.Logger
 }
 
 func NewClient(conn string, adapter ConnectionAdapterClient, log *zap.Logger) *Client {
+	log.Info("New connection.")
+
 	return &Client{
 		buf: make([]byte, 0, 0xff),
+		cli: adapter,
 
-		Conn:    conn,
-		Adapter: adapter,
-		Log:     log,
+		Conn: conn,
+		Log:  log,
 	}
 }
 
@@ -44,11 +42,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
 			continue
 		}
 
-		err := c.exec(ctx)
-
-		if err != nil {
-			c.Log.Error(ERR, zap.Error(err))
-		}
+		c.exec(ctx)
 
 		if cap(c.buf) > 0xff {
 			c.buf = make([]byte, 0, 0xff)
@@ -60,6 +54,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
 
 func (c *Client) exec(ctx context.Context) error {
 	if c.obs != "" {
+		c.Log.Warn("Execution cancelled due to active GET request.")
 		return nil
 	}
 
@@ -68,124 +63,22 @@ func (c *Client) exec(ctx context.Context) error {
 	err := cmd.Decode(c.buf)
 
 	if err != nil {
+		c.Log.Error("Could not decode command.", zap.Error(err), zap.String("cmd", string(c.buf)))
 		return err
 	}
 
 	switch cmd.Method {
 	case PUB:
-		return c.publish(ctx, &cmd)
+		return c.publish(ctx, cmd.Topic, &cmd.Record)
 	case SUB:
-		return c.subscribe(ctx, &cmd)
+		return c.subscribe(ctx, cmd.Topic)
 	case USB:
-		return c.unsubscribe(ctx, &cmd)
+		return c.unsubscribe(ctx, cmd.Topic)
 	case GET:
-		return c.get(ctx, &cmd)
+		return c.get(ctx, cmd.Topic)
 	default:
-		panic("Must be already aborted.")
+		panic("Impossible condition.")
 	}
-}
-
-func (c *Client) publish(ctx context.Context, cmd *Command) error {
-	pay, err := json.Marshal(&cmd.Record)
-
-	if err != nil {
-		return err
-	}
-
-	res, err := c.Adapter.Publish(ctx, &PublishRequest{
-		Conn:    c.Conn,
-		Topic:   cmd.Topic,
-		Qos:     0,
-		Payload: pay,
-	})
-
-	if err != nil {
-		return err
-	}
-
-	if res.GetCode() != ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
-	}
-
-	return nil
-}
-
-func (c *Client) subscribe(ctx context.Context, cmd *Command) error {
-	res, err := c.Adapter.Subscribe(ctx, &SubscribeRequest{
-		Conn:  c.Conn,
-		Topic: cmd.Topic,
-		Qos:   2,
-	})
-
-	if err != nil {
-		return err
-	}
-
-	if res.GetCode() != ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
-	}
-
-	return nil
-}
-
-func (c *Client) unsubscribe(ctx context.Context, cmd *Command) error {
-	res, err := c.Adapter.Unsubscribe(ctx, &UnsubscribeRequest{
-		Conn:  c.Conn,
-		Topic: cmd.Topic,
-	})
-
-	if err != nil {
-		return err
-	}
-
-	if res.GetCode() != ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
-	}
-
-	return nil
-}
-
-func (c *Client) get(ctx context.Context, cmd *Command) error {
-	err := c.subscribe(ctx, cmd)
-
-	if err != nil {
-		return err
-	}
-
-	time.AfterFunc(5*time.Second, func() {
-		c.mut.Lock()
-		defer c.mut.Unlock()
-
-		if c.obs != "" {
-			var empty Command
-
-			empty.Topic = cmd.Topic
-			empty.Timestamp.Now()
-
-			enc, _ := empty.Encode()
-			res, err := c.Adapter.Send(ctx, &SendBytesRequest{
-				Conn:  c.Conn,
-				Bytes: enc,
-			})
-
-			if err != nil {
-				c.Log.Error(ERR, zap.Error(err))
-			}
-
-			if res.GetCode() != ResultCode_SUCCESS {
-				c.Log.Error(ERR, zap.String("error", res.GetMessage()))
-			}
-
-			c.obs = ""
-			err = c.unsubscribe(ctx, cmd)
-
-			if err != nil {
-				c.Log.Error(ERR, zap.Error(err))
-			}
-		}
-	})
-
-	return nil
 }
 
 func (c *Client) OnTimerTimeout(ctx context.Context, ttp TimerType) {}
@@ -200,34 +93,162 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *Message) {
 		}
 
 		c.obs = ""
+		c.unsubscribe(ctx, msg.GetTopic())
 	}
 
-	cmd, err := c.encodeMessage(msg)
+	cmd, _ := c.parseMessage(msg)
+	enc, err := cmd.Encode()
 
 	if err != nil {
-		c.Log.Error("An error occurred while encoding message.", zap.Error(err))
+		c.Log.Error("Could not encode message.", zap.Error(err))
+		return
 	}
 
-	_, err = c.Adapter.Send(ctx, &SendBytesRequest{
+	_, err = c.cli.Send(ctx, &SendBytesRequest{
 		Conn:  c.Conn,
-		Bytes: cmd,
+		Bytes: enc,
 	})
 
 	if err != nil {
-		c.Log.Error("An error occurred while sending command.", zap.Error(err))
+		c.Log.Error("Could not send message.", zap.Error(err))
 	}
 }
 
-func (c *Client) encodeMessage(msg *Message) ([]byte, error) {
-	cmd := Command{
+func (c *Client) parseMessage(msg *Message) (*Command, error) {
+	cmd := &Command{
 		Topic: msg.GetTopic(),
 	}
 
 	err := json.Unmarshal(msg.GetPayload(), &cmd.Record)
 
 	if err != nil {
+		c.Log.Error("Could not parse message.", zap.Error(err))
 		return nil, err
 	}
 
-	return cmd.Encode()
+	return cmd, nil
+}
+
+func (c *Client) send(ctx context.Context, cmd *Command) error {
+	bytes, err := cmd.Encode()
+
+	if err != nil {
+		c.Log.Error("Could not encode command.", zap.Error(err))
+		return err
+	}
+
+	res, err := c.cli.Send(ctx, &SendBytesRequest{
+		Conn:  c.Conn,
+		Bytes: bytes,
+	})
+
+	if err != nil {
+		c.Log.Error("Could not send request.", zap.Error(err), zap.Any("cmd", cmd))
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		err := fmt.Errorf(res.GetMessage())
+		c.Log.Error("Unsuccessful request.", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) publish(ctx context.Context, top string, rec *Record) error {
+	pay, err := json.Marshal(rec)
+
+	if err != nil {
+		c.Log.Error("Could not encode record.", zap.Error(err), zap.Any("record", rec))
+		return err
+	}
+
+	res, err := c.cli.Publish(ctx, &PublishRequest{
+		Conn:    c.Conn,
+		Topic:   top,
+		Qos:     0,
+		Payload: pay,
+	})
+
+	if err != nil {
+		c.Log.Error("Could not send request.", zap.Error(err))
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		err := fmt.Errorf(res.GetMessage())
+		c.Log.Error("Unsuccessful request.", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) subscribe(ctx context.Context, top string) error {
+	res, err := c.cli.Subscribe(ctx, &SubscribeRequest{
+		Conn:  c.Conn,
+		Topic: top,
+		Qos:   2,
+	})
+
+	if err != nil {
+		c.Log.Error("Could not send request.", zap.Error(err))
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		err := fmt.Errorf(res.GetMessage())
+		c.Log.Error("Unsuccessful request.", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) unsubscribe(ctx context.Context, top string) error {
+	res, err := c.cli.Unsubscribe(ctx, &UnsubscribeRequest{
+		Conn:  c.Conn,
+		Topic: top,
+	})
+
+	if err != nil {
+		c.Log.Error("Could not send request.", zap.Error(err))
+		return err
+	}
+
+	if res.GetCode() != ResultCode_SUCCESS {
+		err := fmt.Errorf(res.GetMessage())
+		c.Log.Error("Unsuccessful request.", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) get(ctx context.Context, top string) error {
+	err := c.subscribe(ctx, top)
+
+	if err != nil {
+		return err
+	}
+
+	time.AfterFunc(5*time.Second, func() {
+		c.mut.Lock()
+		defer c.mut.Unlock()
+
+		if c.obs != "" {
+			c.unsubscribe(ctx, top)
+			c.send(ctx, &Command{
+				Topic: top,
+				Record: Record{
+					Timestamp: Now(),
+				},
+			})
+
+			c.obs = ""
+		}
+	})
+
+	return nil
 }

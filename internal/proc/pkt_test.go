@@ -2,74 +2,63 @@ package proc
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func check(t *testing.T, got any, want any) {
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf(`got %v, want %v`, got, want)
-	}
-}
-
-var tm Time
-
 func TestTimeParse(t *testing.T) {
+	var tm Time
+
 	err := tm.Parse("11.06.2005 23_59_59.999")
 
 	if err != nil {
 		t.Error(err)
 	}
 
-	check(t, tm.UnixMilli(), int64(1118509199999))
+	assert.Equal(t, int64(1118509199999), tm.UnixMilli())
 }
 
 func TestTimeParseError(t *testing.T) {
-	err := tm.Parse("11:06:2005 23_59_59.999")
+	var tm Time
 
-	if err == nil {
-		t.Fail()
-	}
+	assert.NotNil(t, tm.Parse("11:06:2005 23_59_59.999"))
 }
 
 func TestTimeFormat(t *testing.T) {
-	tm.Time = time.UnixMilli(1118509199999)
+	var tm Time
 
-	if tm.Format() != "11.06.2005 23_59_59.999" {
-		t.Fail()
-	}
+	tm.Set(1118509199999)
+
+	assert.Equal(t, "11.06.2005 23_59_59.999", tm.Format())
 }
 
-var rec Record
-
 func TestRecordMarshal(t *testing.T) {
-	rec.Timestamp.Set(1118509199999)
-	rec.Value = "0x1118509199999"
-
-	res, err := json.Marshal(rec)
-
-	if err != nil {
-		t.Error(err)
+	rec := Record{
+		Value: "0x1118509199999",
 	}
 
-	check(t, string(res), `{"value":"0x1118509199999","timestamp":1118509199999}`)
+	rec.Timestamp.Set(1118509199999)
+	res, err := json.Marshal(rec)
+
+	assert.Nil(t, err)
+	assert.Equal(t, `{"value":"0x1118509199999","timestamp":1118509199999}`, string(res))
 }
 
 func TestRecordMarshalEmptyValue(t *testing.T) {
-	rec.Value = ""
-	rec.Timestamp.Set(1118509199999)
+	var rec Record
 
+	rec.Timestamp.Set(1118509199999)
 	res, err := json.Marshal(rec)
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, string(res), `{"timestamp":1118509199999}`)
+	assert.Nil(t, err)
+	assert.Equal(t, `{"timestamp":1118509199999}`, string(res))
 }
 
 func TestRecordUnmarshal(t *testing.T) {
+	var rec Record
+
 	err := json.Unmarshal([]byte(`
 	{
 		"extra": 1118509199999,
@@ -78,15 +67,14 @@ func TestRecordUnmarshal(t *testing.T) {
 	}
 	`), &rec)
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, rec.Value, "0x1118509199999")
-	check(t, rec.Timestamp.UnixMilli(), int64(1118509199999))
+	assert.Nil(t, err)
+	assert.Equal(t, "0x1118509199999", rec.Value)
+	assert.Equal(t, int64(1118509199999), rec.Timestamp.UnixMilli())
 }
 
 func TestRecordUnmarshalEmptyValue(t *testing.T) {
+	var rec Record
+
 	rec.Value = "none"
 
 	err := json.Unmarshal([]byte(`
@@ -96,15 +84,14 @@ func TestRecordUnmarshalEmptyValue(t *testing.T) {
 	}
 	`), &rec)
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, rec.Value, "none")
-	check(t, rec.Timestamp.UnixMilli(), int64(1118509199999))
+	assert.Nil(t, err)
+	assert.Equal(t, "none", rec.Value)
+	assert.Equal(t, int64(1118509199999), rec.Timestamp.UnixMilli())
 }
 
 func TestRecordUnmarshalEmptyTimestamp(t *testing.T) {
+	var rec Record
+
 	rec.Timestamp.Set(1118509199000)
 
 	err := json.Unmarshal([]byte(`
@@ -114,248 +101,230 @@ func TestRecordUnmarshalEmptyTimestamp(t *testing.T) {
 	}
 	`), &rec)
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, rec.Value, "0x1118509199999")
-	check(t, rec.Timestamp.UnixMilli(), int64(1118509199000))
+	assert.Nil(t, err)
+	assert.Equal(t, "0x1118509199999", rec.Value)
+	assert.Equal(t, int64(1118509199000), rec.Timestamp.UnixMilli())
 }
 
-var cmd Command
-
 func TestCommandDecodeShortPub(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:s|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Topic, "test")
-	check(t, cmd.Method, PUB)
-	check(t, cmd.Value, "11.06")
-	check(t, cmd.Timestamp.UnixMilli(), int64(1118509199999))
+	assert.Nil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:s|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, PUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeShortSub(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:sb|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, SUB)
+	assert.Nil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:sb|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, SUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeShortUsb(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:f|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, USB)
+	assert.Nil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:f|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, USB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 
 }
 
 func TestCommandDecodeShortGet(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:g|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
+	assert.Nil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:g|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, GET, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 
-	if cmd.Method != GET {
-		t.Fail()
-	}
-
-	err = cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:gf|v:11.06"))
-
-	if err != nil {
-		t.Error(err)
-	}
-
-	if cmd.Method != GET {
-		t.Fail()
-	}
+	assert.Nil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:gf|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, GET, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeMidPub(t *testing.T) {
-	err := cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:pub|val:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Topic, "test")
-	check(t, cmd.Method, PUB)
-	check(t, cmd.Value, "11.06")
-	check(t, cmd.Timestamp.UnixMilli(), int64(1118509199999))
+	assert.Nil(t, cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:pub|val:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, PUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeMidSub(t *testing.T) {
-	err := cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:sub|val:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
+	assert.Nil(t, cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:sub|val:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, SUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 
-	check(t, cmd.Method, SUB)
-
-	err = cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:subscr|val:11.06"))
-
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, SUB)
+	assert.Nil(t, cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:subscr|val:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, SUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeMidUsb(t *testing.T) {
-	err := cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:rel|val:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, USB)
+	assert.Nil(t, cmd.Decode([]byte("tm:11.06.2005 23_59_59.999|nm:test|meth:rel|val:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, USB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeLongPub(t *testing.T) {
-	err := cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:set|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
+	assert.Nil(t, cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:set|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, PUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 
-	check(t, cmd.Topic, "test")
-	check(t, cmd.Method, PUB)
-	check(t, cmd.Value, "11.06")
-	check(t, cmd.Timestamp.UnixMilli(), int64(1118509199999))
-
-	err = cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:publish|v:11.06"))
-
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, PUB)
+	assert.Nil(t, cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:publish|v:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, PUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeLongSub(t *testing.T) {
-	err := cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:subscribe|value:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, SUB)
+	assert.Nil(t, cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:subscribe|value:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, SUB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeLongUsb(t *testing.T) {
-	err := cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:free|value:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
+	assert.Nil(t, cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:free|value:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, USB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 
-	check(t, cmd.Method, USB)
-
-	err = cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:release|value:11.06"))
-
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, cmd.Method, USB)
+	assert.Nil(t, cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:release|value:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, USB, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
 }
 
 func TestCommandDecodeLongGet(t *testing.T) {
-	err := cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:getfull|value:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
+	assert.Nil(t, cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:getfull|value:11.06")))
+	assert.Equal(t, "test", cmd.Topic)
+	assert.Equal(t, GET, cmd.Method)
+	assert.Equal(t, "11.06", cmd.Value)
+	assert.Equal(t, int64(1118509199999), cmd.Timestamp.UnixMilli())
+}
+
+func BenchmarkCommandDecode(b *testing.B) {
+	var cmd Command
+
+	for range b.N {
+		cmd.Decode([]byte("time:11.06.2005 23_59_59.999|name:test|method:getfull|value:11.06"))
 	}
-
-	check(t, cmd.Method, GET)
 }
 
 func TestCommandDecodeUnknownMethodError(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:unknown|v:11.06"))
+	var cmd Command
 
-	if err == nil {
-		t.Fail()
-	}
+	assert.NotNil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|m:unknown|v:11.06")))
 }
 
 func TestCommandDecodeMethodMissedError(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|v:11.06"))
+	var cmd Command
 
-	if err == nil {
-		t.Fail()
-	}
+	assert.NotNil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|n:test|v:11.06")))
 }
 
 func TestCommandDecodeTopicMissedError(t *testing.T) {
-	err := cmd.Decode([]byte("t:11.06.2005 23_59_59.999|m:set|v:11.06"))
+	var cmd Command
 
-	if err == nil {
-		t.Fail()
-	}
+	assert.NotNil(t, cmd.Decode([]byte("t:11.06.2005 23_59_59.999|m:set|v:11.06")))
 }
 
 func TestCommandDecodeTimeMissed(t *testing.T) {
-	err := cmd.Decode([]byte("n:test|m:set|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	if time.Since(cmd.Timestamp.Time) > 3*time.Second {
-		t.Fail()
-	}
+	assert.Nil(t, cmd.Decode([]byte("n:test|m:set|v:11.06")))
+	assert.Less(t, time.Since(cmd.Timestamp.Time), 3*time.Second)
 }
 
 func TestCommandDecodeExtraToken(t *testing.T) {
-	err := cmd.Decode([]byte("n:test|extra:token|m:set|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
+	assert.Nil(t, cmd.Decode([]byte("n:test|extra:token|m:set|v:11.06")))
 }
 
 func TestCommandDecodeMalformedToken(t *testing.T) {
-	err := cmd.Decode([]byte("n:test|malformed|m:set|v:11.06"))
+	var cmd Command
 
-	if err != nil {
-		t.Error(err)
-	}
+	assert.Nil(t, cmd.Decode([]byte("n:test|malformed|m:set|v:11.06")))
 }
 
 func TestCommandEncode(t *testing.T) {
-	cmd.Topic = "test"
-	cmd.Value = "11.06"
-	cmd.Timestamp.Set(1118509199999)
+	cmd := Command{
+		Topic: "test",
+		Record: Record{
+			Value:     "11.06",
+			Timestamp: UnixMilli(1118509199999),
+		},
+	}
 
 	enc, err := cmd.Encode()
 
-	if err != nil {
-		t.Error(err)
+	assert.Nil(t, err)
+	assert.Equal(t, "time:11.06.2005 23_59_59.999|name:test|descr:-|units:-|type:rw|val:11.06\n", string(enc))
+}
+
+func BenchmarkCommandEncode(b *testing.B) {
+	cmd := Command{
+		Topic: "test",
+		Record: Record{
+			Value:     "11.06",
+			Timestamp: UnixMilli(1118509199999),
+		},
 	}
 
-	check(t, string(enc), "time:11.06.2005 23_59_59.999|name:test|descr:-|units:-|type:rw|val:11.06\n")
+	for range b.N {
+		cmd.Encode()
+	}
 }
 
 func TestCommandEncodeValueEmpty(t *testing.T) {
-	cmd.Topic = "test"
-	cmd.Value = ""
-	cmd.Timestamp.Set(1118509199999)
+	cmd := Command{
+		Topic: "test",
+		Record: Record{
+			Timestamp: UnixMilli(1118509199999),
+		},
+	}
 
 	enc, err := cmd.Encode()
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	check(t, string(enc), "time:11.06.2005 23_59_59.999|name:test|descr:-|units:-|type:rw|val:none\n")
+	assert.Nil(t, err)
+	assert.Equal(t, "time:11.06.2005 23_59_59.999|name:test|descr:-|units:-|type:rw|val:none\n", string(enc))
 }

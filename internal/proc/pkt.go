@@ -34,8 +34,14 @@ type Time struct {
 	time.Time
 }
 
-func (t *Time) Now() {
-	t.Time = time.Now().In(Location)
+func Now() Time {
+	return Time{
+		time.Now().In(Location),
+	}
+}
+
+func UnixMilli(milli int64) Time {
+	return Time{time.UnixMilli(milli)}
 }
 
 func (t *Time) Set(milli int64) {
@@ -62,7 +68,7 @@ func (t Time) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.FormatInt(t.UnixMilli(), 10)), nil
 }
 
-func (t Time) UnmarshalJSON(json []byte) error {
+func (t *Time) UnmarshalJSON(json []byte) error {
 	milli, err := strconv.ParseInt(string(json), 10, 64)
 
 	if err != nil {
@@ -87,10 +93,7 @@ type Command struct {
 }
 
 func (cmd *Command) Decode(in []byte) error {
-	cmd.Topic = ""
-	cmd.Method = 0
-	cmd.Timestamp.Now()
-
+	cmd.Timestamp = Now()
 	tok := strings.Split(string(in), "|")
 
 	for _, t := range tok {

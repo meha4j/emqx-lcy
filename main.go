@@ -28,7 +28,8 @@ func init() {
 }
 
 func main() {
-	log, err := zap.NewDevelopment()
+	log, err := zap.NewProduction()
+	defer log.Sync()
 
 	if err != nil {
 		panic(err)
@@ -51,11 +52,12 @@ func main() {
 
 	rpc := grpc.NewServer()
 
-	prc := proc.NewService(storage, adapter, log)
-	ath := auth.NewService(log)
-
-	proc.RegisterConnectionUnaryHandlerServer(rpc, prc)
-	auth.RegisterHookProviderServer(rpc, ath)
+	proc.RegisterConnectionUnaryHandlerServer(rpc, proc.NewService(
+		storage,
+		adapter,
+		log.With(zap.String("svc", "proc")),
+	))
+	auth.RegisterHookProviderServer(rpc, auth.NewService(log.With(zap.String("svc", "auth"))))
 
 	log.Info("Listening.", zap.String("addr", net.Addr().String()))
 	rpc.Serve(net)

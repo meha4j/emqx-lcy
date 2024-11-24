@@ -31,18 +31,20 @@ type Storage interface {
 }
 
 type service struct {
+	Log *zap.Logger
+
 	storage Storage
 	adapter ConnectionAdapterClient
-	log     *zap.Logger
 
 	UnimplementedConnectionUnaryHandlerServer
 }
 
 func NewService(storage Storage, adapter ConnectionAdapterClient, log *zap.Logger) ConnectionUnaryHandlerServer {
 	return &service{
+		Log: log,
+
 		storage: storage,
 		adapter: adapter,
-		log:     log,
 	}
 }
 
@@ -57,27 +59,26 @@ func (s *service) OnSocketCreated(ctx context.Context, req *SocketCreatedRequest
 	})
 
 	if err != nil {
-		s.log.Error("Authentication error.", zap.Error(err))
+		s.Log.Error("Could not authenticate client.", zap.Error(err))
 
-		_, err := s.adapter.Close(ctx, &CloseSocketRequest{
+		s.adapter.Close(ctx, &CloseSocketRequest{
 			Conn: req.Conn,
 		})
-
-		if err != nil {
-			s.log.Error("Termination error.", zap.Error(err))
-		}
 
 		return nil, nil
 	}
 
-	s.log.Info("New connection.", zap.String("conn", req.GetConn()))
-	s.storage.SetClient(req.GetConn(), NewClient(req.GetConn(), s.adapter, s.log))
+	s.storage.SetClient(req.GetConn(), NewClient(
+		req.GetConn(),
+		s.adapter,
+		s.Log.With(zap.String("conn", req.GetConn())),
+	))
 
 	return nil, nil
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *SocketClosedRequest) (*EmptySuccess, error) {
-	s.log.Info("Connection closed.", zap.String("conn", req.GetConn()))
+	s.Log.Info("Connection closed.", zap.String("conn", req.GetConn()))
 	s.storage.SetClient(req.GetConn(), nil)
 
 	return nil, nil
