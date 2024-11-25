@@ -13,16 +13,14 @@ import (
 type Client struct {
 	buf []byte
 	obs string
-	mut sync.Mutex
 	cli ConnectionAdapterClient
+	mut sync.Mutex
 
 	Conn string
 	Log  *zap.Logger
 }
 
 func NewClient(conn string, adapter ConnectionAdapterClient, log *zap.Logger) *Client {
-	log.Info("New connection.")
-
 	return &Client{
 		buf: make([]byte, 0, 0xff),
 		cli: adapter,
@@ -32,7 +30,7 @@ func NewClient(conn string, adapter ConnectionAdapterClient, log *zap.Logger) *C
 	}
 }
 
-func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
+func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	c.mut.Lock()
 	defer c.mut.Unlock()
 
@@ -42,7 +40,9 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
 			continue
 		}
 
-		c.exec(ctx)
+		if err := c.exec(ctx); err != nil {
+			return fmt.Errorf("exec: %v", err)
+		}
 
 		if cap(c.buf) > 0xff {
 			c.buf = make([]byte, 0, 0xff)
@@ -50,21 +50,19 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) {
 			c.buf = c.buf[:0]
 		}
 	}
+
+	return nil
 }
 
 func (c *Client) exec(ctx context.Context) error {
 	if c.obs != "" {
-		c.Log.Warn("Execution cancelled due to active GET request.")
 		return nil
 	}
 
 	var cmd Command
 
-	err := cmd.Decode(c.buf)
-
-	if err != nil {
-		c.Log.Error("Could not decode command.", zap.Error(err), zap.String("cmd", string(c.buf)))
-		return err
+	if err := cmd.Decode(c.buf); err != nil {
+		return fmt.Errorf("decode: %v", err)
 	}
 
 	switch cmd.Method {
@@ -77,41 +75,39 @@ func (c *Client) exec(ctx context.Context) error {
 	case GET:
 		return c.get(ctx, cmd.Topic)
 	default:
-		panic("Impossible condition.")
+		panic("impossible condition")
 	}
 }
 
-func (c *Client) OnTimerTimeout(ctx context.Context, ttp TimerType) {}
+func (c *Client) OnTimerTimeout(ctx context.Context, ttp TimerType) error { return nil }
 
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *Message) {
+func (c *Client) OnReceivedMessage(ctx context.Context, msg *Message) error {
 	c.mut.Lock()
 	defer c.mut.Unlock()
 
 	if c.obs != "" {
 		if c.obs != msg.GetTopic() {
-			return
+			return nil
 		}
 
 		c.obs = ""
-		c.unsubscribe(ctx, msg.GetTopic())
+
+		if err := c.unsubscribe(ctx, msg.GetTopic()); err != nil {
+			return fmt.Errorf("unsubscribe: %v", err)
+		}
 	}
 
-	cmd, _ := c.parseMessage(msg)
-	enc, err := cmd.Encode()
+	cmd, err := c.parseMessage(msg)
 
 	if err != nil {
-		c.Log.Error("Could not encode message.", zap.Error(err))
-		return
+		return fmt.Errorf("parse: %v", err)
 	}
 
-	_, err = c.cli.Send(ctx, &SendBytesRequest{
-		Conn:  c.Conn,
-		Bytes: enc,
-	})
-
-	if err != nil {
-		c.Log.Error("Could not send message.", zap.Error(err))
+	if err := c.send(ctx, cmd); err != nil {
+		return fmt.Errorf("send: %v", err)
 	}
+
+	return nil
 }
 
 func (c *Client) parseMessage(msg *Message) (*Command, error) {
@@ -119,38 +115,25 @@ func (c *Client) parseMessage(msg *Message) (*Command, error) {
 		Topic: msg.GetTopic(),
 	}
 
-	err := json.Unmarshal(msg.GetPayload(), &cmd.Record)
-
-	if err != nil {
-		c.Log.Error("Could not parse message.", zap.Error(err))
-		return nil, err
+	if err := json.Unmarshal(msg.GetPayload(), &cmd.Record); err != nil {
+		return nil, fmt.Errorf("payload: %v", err)
 	}
 
 	return cmd, nil
 }
 
 func (c *Client) send(ctx context.Context, cmd *Command) error {
-	bytes, err := cmd.Encode()
-
-	if err != nil {
-		c.Log.Error("Could not encode command.", zap.Error(err))
-		return err
-	}
-
 	res, err := c.cli.Send(ctx, &SendBytesRequest{
 		Conn:  c.Conn,
-		Bytes: bytes,
+		Bytes: cmd.Encode(),
 	})
 
 	if err != nil {
-		c.Log.Error("Could not send request.", zap.Error(err), zap.Any("cmd", cmd))
-		return err
+		return fmt.Errorf("adapter: %v", err)
 	}
 
 	if res.GetCode() != ResultCode_SUCCESS {
-		err := fmt.Errorf(res.GetMessage())
-		c.Log.Error("Unsuccessful request.", zap.Error(err))
-		return err
+		return fmt.Errorf(res.GetMessage())
 	}
 
 	return nil
@@ -160,8 +143,7 @@ func (c *Client) publish(ctx context.Context, top string, rec *Record) error {
 	pay, err := json.Marshal(rec)
 
 	if err != nil {
-		c.Log.Error("Could not encode record.", zap.Error(err), zap.Any("record", rec))
-		return err
+		return fmt.Errorf("marshal: %v", err)
 	}
 
 	res, err := c.cli.Publish(ctx, &PublishRequest{
@@ -172,14 +154,11 @@ func (c *Client) publish(ctx context.Context, top string, rec *Record) error {
 	})
 
 	if err != nil {
-		c.Log.Error("Could not send request.", zap.Error(err))
-		return err
+		return fmt.Errorf("adapter: %v", err)
 	}
 
 	if res.GetCode() != ResultCode_SUCCESS {
-		err := fmt.Errorf(res.GetMessage())
-		c.Log.Error("Unsuccessful request.", zap.Error(err))
-		return err
+		return fmt.Errorf(res.GetMessage())
 	}
 
 	return nil
@@ -193,14 +172,11 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 	})
 
 	if err != nil {
-		c.Log.Error("Could not send request.", zap.Error(err))
-		return err
+		return fmt.Errorf("adapter: %v", err)
 	}
 
 	if res.GetCode() != ResultCode_SUCCESS {
-		err := fmt.Errorf(res.GetMessage())
-		c.Log.Error("Unsuccessful request.", zap.Error(err))
-		return err
+		return fmt.Errorf(res.GetMessage())
 	}
 
 	return nil
@@ -213,14 +189,11 @@ func (c *Client) unsubscribe(ctx context.Context, top string) error {
 	})
 
 	if err != nil {
-		c.Log.Error("Could not send request.", zap.Error(err))
-		return err
+		return fmt.Errorf("adapter: %v", err)
 	}
 
 	if res.GetCode() != ResultCode_SUCCESS {
-		err := fmt.Errorf(res.GetMessage())
-		c.Log.Error("Unsuccessful request.", zap.Error(err))
-		return err
+		return fmt.Errorf(res.GetMessage())
 	}
 
 	return nil
@@ -230,7 +203,7 @@ func (c *Client) get(ctx context.Context, top string) error {
 	err := c.subscribe(ctx, top)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("subscribe: %v", err)
 	}
 
 	time.AfterFunc(5*time.Second, func() {
@@ -238,15 +211,15 @@ func (c *Client) get(ctx context.Context, top string) error {
 		defer c.mut.Unlock()
 
 		if c.obs != "" {
+			c.obs = ""
+
 			c.unsubscribe(ctx, top)
 			c.send(ctx, &Command{
 				Topic: top,
 				Record: Record{
-					Timestamp: Now(),
+					Timestamp: Time{time.Now()},
 				},
 			})
-
-			c.obs = ""
 		}
 	})
 

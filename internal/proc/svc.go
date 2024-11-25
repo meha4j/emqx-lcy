@@ -2,9 +2,12 @@ package proc
 
 import (
 	context "context"
+	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"go.uber.org/zap"
 )
@@ -19,7 +22,7 @@ func NewAdapter(uri string) (ConnectionAdapterClient, error) {
 	cli, err := grpc.NewClient(uri, grpc.WithTransportCredentials(crd))
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("grpc: %v", err)
 	}
 
 	return NewConnectionAdapterClient(cli), nil
@@ -49,7 +52,13 @@ func NewService(storage Storage, adapter ConnectionAdapterClient, log *zap.Logge
 }
 
 func (s *service) OnSocketCreated(ctx context.Context, req *SocketCreatedRequest) (*EmptySuccess, error) {
-	_, err := s.adapter.Authenticate(ctx, &AuthenticateRequest{
+	log := s.Log.With(
+		zap.String("conn", req.GetConn()),
+		zap.String("host", req.GetConninfo().GetPeername().GetHost()),
+		zap.Uint32("port", req.GetConninfo().GetPeername().GetPort()),
+	)
+
+	res, err := s.adapter.Authenticate(ctx, &AuthenticateRequest{
 		Conn: req.GetConn(),
 		Clientinfo: &ClientInfo{
 			ProtoName: PROTO_NAME,
@@ -59,27 +68,38 @@ func (s *service) OnSocketCreated(ctx context.Context, req *SocketCreatedRequest
 	})
 
 	if err != nil {
-		s.Log.Error("Could not authenticate client.", zap.Error(err))
+		s.Log.Error("adapter", zap.Error(err))
 
 		s.adapter.Close(ctx, &CloseSocketRequest{
 			Conn: req.Conn,
 		})
 
-		return nil, nil
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	s.storage.SetClient(req.GetConn(), NewClient(
-		req.GetConn(),
-		s.adapter,
-		s.Log.With(zap.String("conn", req.GetConn())),
-	))
+	if res.GetCode() != ResultCode_SUCCESS {
+		log.Error("authentication", zap.String("error", res.GetMessage()))
+
+		s.adapter.Close(ctx, &CloseSocketRequest{Conn: req.Conn})
+
+		return nil, status.Error(codes.Unauthenticated, res.GetMessage())
+	}
+
+	log.Info("authenticated")
+	s.storage.SetClient(req.GetConn(), NewClient(req.GetConn(), s.adapter, log))
 
 	return nil, nil
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *SocketClosedRequest) (*EmptySuccess, error) {
-	s.Log.Info("Connection closed.", zap.String("conn", req.GetConn()))
-	s.storage.SetClient(req.GetConn(), nil)
+	cli, ok := s.storage.GetClient(req.GetConn())
+
+	if !ok {
+		return nil, nil
+	}
+
+	cli.Log.Info("socket closed", zap.String("reason", req.GetReason()))
+	s.storage.SetClient(cli.Conn, nil)
 
 	return nil, nil
 }
@@ -91,7 +111,11 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *ReceivedBytesRequest
 		return nil, nil
 	}
 
-	cli.OnReceivedBytes(ctx, req.GetBytes())
+	if err := cli.OnReceivedBytes(ctx, req.GetBytes()); err != nil {
+		cli.Log.Error("received bytes", zap.Error(err))
+
+		return nil, status.Error(codes.Unknown, err.Error())
+	}
 
 	return nil, nil
 }
@@ -103,7 +127,11 @@ func (s *service) OnTimerTimeout(ctx context.Context, req *TimerTimeoutRequest) 
 		return nil, nil
 	}
 
-	cli.OnTimerTimeout(ctx, req.GetType())
+	if err := cli.OnTimerTimeout(ctx, req.GetType()); err != nil {
+		cli.Log.Error("timer timeout", zap.Error(err))
+
+		return nil, status.Error(codes.Unknown, err.Error())
+	}
 
 	return nil, nil
 }
@@ -116,7 +144,11 @@ func (s *service) OnReceivedMessages(ctx context.Context, req *ReceivedMessagesR
 	}
 
 	for _, msg := range req.GetMessages() {
-		cli.OnReceivedMessage(ctx, msg)
+		if err := cli.OnReceivedMessage(ctx, msg); err != nil {
+			cli.Log.Error("received message", zap.Error(err))
+
+			return nil, status.Error(codes.Unknown, err.Error())
+		}
 	}
 
 	return nil, nil
