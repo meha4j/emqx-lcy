@@ -4,24 +4,19 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/meha4j/extd/internal/proc"
+	"github.com/meha4j/extd/internal/proc/proto"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 const (
-	PORT              = "port"
-	PROC_ADAPTER_ADDR = "proc.adapter.addr"
+	Port = "port"
 )
 
 func init() {
 	viper.SetEnvPrefix("extd")
-
-	viper.BindEnv(PORT)
-	viper.BindEnv(PROC_ADAPTER_ADDR)
-
-	viper.SetDefault(PORT, 9111)
-	viper.SetDefault(PROC_ADAPTER_ADDR, "10.5.0.5:9110")
 }
 
 func main() {
@@ -32,7 +27,7 @@ func main() {
 		panic(err)
 	}
 
-	net, err := net.Listen("tcp", fmt.Sprintf(":%v", viper.GetInt(PORT)))
+	net, err := net.Listen("tcp", fmt.Sprintf(":%v", viper.GetInt(Port)))
 
 	if err != nil {
 		panic(err)
@@ -41,7 +36,13 @@ func main() {
 	defer net.Close()
 
 	srv := grpc.NewServer()
+	svc, err := proc.NewService(log.With(zap.String("svc", "proc")))
 
+	if err != nil {
+		panic(err)
+	}
+
+	proto.RegisterConnectionUnaryHandlerServer(srv, svc)
 	log.Info("Listening.", zap.String("addr", net.Addr().String()))
 	srv.Serve(net)
 }

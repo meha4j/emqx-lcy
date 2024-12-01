@@ -209,7 +209,7 @@ func unmarshalMap(tok map[string]string, v *reflect.Value) error {
 	}
 
 	for mk, mv := range tok {
-		rv := reflect.New(v.Type().Key())
+		rv := reflect.New(v.Type())
 
 		if err := unmarshal([]byte(mv), &rv); err != nil {
 			return fmt.Errorf("value unmarshal: %v", err)
@@ -225,8 +225,8 @@ func unmarshalStruct(tok map[string]string, v *reflect.Value) error {
 	t := v.Type()
 
 	for i := range t.NumField() {
-		n, ok := t.Field(i).Tag.Lookup("vcas")
 		f := v.Field(i)
+		n, ok := t.Field(i).Tag.Lookup("vcas")
 
 		if !ok {
 			switch f.Type().Kind() {

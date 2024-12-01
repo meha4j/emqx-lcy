@@ -4,115 +4,106 @@ import (
 	context "context"
 	"fmt"
 
+	"github.com/meha4j/extd/internal/proc/proto"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"go.uber.org/zap"
 )
 
 const (
-	PROTO_NAME    = "VCAS"
-	PROTO_VERSION = "FINAL"
+	ProtoName = "vcas"
+	ProtoVer  = "final"
+
+	AdapterAddr = "adapter.addr"
 )
-
-func NewAdapter(uri string) (ConnectionAdapterClient, error) {
-	crd := insecure.NewCredentials()
-	cli, err := grpc.NewClient(uri, grpc.WithTransportCredentials(crd))
-
-	if err != nil {
-		return nil, fmt.Errorf("grpc: %v", err)
-	}
-
-	return NewConnectionAdapterClient(cli), nil
-}
-
-type Storage interface {
-	GetClient(conn string) (*Client, bool)
-	SetClient(conn string, cli *Client)
-}
 
 type service struct {
 	Log *zap.Logger
 
-	storage Storage
-	adapter ConnectionAdapterClient
+	store   *Store
+	adapter proto.ConnectionAdapterClient
 
-	UnimplementedConnectionUnaryHandlerServer
+	proto.UnimplementedConnectionUnaryHandlerServer
 }
 
-func NewService(storage Storage, adapter ConnectionAdapterClient, log *zap.Logger) ConnectionUnaryHandlerServer {
-	return &service{
-		Log: log,
+func NewService(log *zap.Logger) (proto.ConnectionUnaryHandlerServer, error) {
+	conn, err := grpc.NewClient(viper.GetString(AdapterAddr))
 
-		storage: storage,
-		adapter: adapter,
+	if err != nil {
+		return nil, fmt.Errorf("grpc client: %v", err)
 	}
+
+	adapter := proto.NewConnectionAdapterClient(conn)
+	store := &Store{}
+
+	return &service{
+		Log:     log,
+		store:   store,
+		adapter: adapter,
+	}, nil
 }
 
-func (s *service) OnSocketCreated(ctx context.Context, req *SocketCreatedRequest) (*EmptySuccess, error) {
+func (s *service) OnSocketCreated(ctx context.Context, req *proto.SocketCreatedRequest) (*proto.EmptySuccess, error) {
 	log := s.Log.With(
 		zap.String("conn", req.GetConn()),
 		zap.String("host", req.GetConninfo().GetPeername().GetHost()),
 		zap.Uint32("port", req.GetConninfo().GetPeername().GetPort()),
 	)
 
-	res, err := s.adapter.Authenticate(ctx, &AuthenticateRequest{
+	res, err := s.adapter.Authenticate(ctx, &proto.AuthenticateRequest{
 		Conn: req.GetConn(),
-		Clientinfo: &ClientInfo{
-			ProtoName: PROTO_NAME,
-			ProtoVer:  PROTO_VERSION,
+		Clientinfo: &proto.ClientInfo{
+			ProtoName: ProtoName,
+			ProtoVer:  ProtoVer,
 			Clientid:  req.GetConn(),
 		},
 	})
 
 	if err != nil {
 		s.Log.Error("adapter", zap.Error(err))
-
-		s.adapter.Close(ctx, &CloseSocketRequest{
-			Conn: req.Conn,
-		})
+		s.adapter.Close(ctx, &proto.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if res.GetCode() != ResultCode_SUCCESS {
+	if res.GetCode() != proto.ResultCode_SUCCESS {
 		log.Error("authentication", zap.String("error", res.GetMessage()))
-
-		s.adapter.Close(ctx, &CloseSocketRequest{Conn: req.Conn})
+		s.adapter.Close(ctx, &proto.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.GetMessage())
 	}
 
 	log.Info("authenticated")
-	s.storage.SetClient(req.GetConn(), NewClient(req.GetConn(), s.adapter, log))
+	s.store.PutClient(req.GetConn(), NewClient(req.GetConn(), s.adapter, log))
 
 	return nil, nil
 }
 
-func (s *service) OnSocketClosed(_ context.Context, req *SocketClosedRequest) (*EmptySuccess, error) {
-	cli, ok := s.storage.GetClient(req.GetConn())
+func (s *service) OnSocketClosed(_ context.Context, req *proto.SocketClosedRequest) (*proto.EmptySuccess, error) {
+	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
 		return nil, nil
 	}
 
-	cli.Log.Info("socket closed", zap.String("reason", req.GetReason()))
-	s.storage.SetClient(cli.Conn, nil)
+	c.Log.Info("closed", zap.String("reason", req.GetReason()))
+	s.store.PutClient(c.Conn, nil)
 
 	return nil, nil
 }
 
-func (s *service) OnReceivedBytes(ctx context.Context, req *ReceivedBytesRequest) (*EmptySuccess, error) {
-	cli, ok := s.storage.GetClient(req.GetConn())
+func (s *service) OnReceivedBytes(ctx context.Context, req *proto.ReceivedBytesRequest) (*proto.EmptySuccess, error) {
+	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
 		return nil, nil
 	}
 
-	if err := cli.OnReceivedBytes(ctx, req.GetBytes()); err != nil {
-		cli.Log.Error("received bytes", zap.Error(err))
+	if err := c.OnReceivedBytes(ctx, req.GetBytes()); err != nil {
+		c.Log.Error("handle bytes", zap.Error(err))
 
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
@@ -120,15 +111,15 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *ReceivedBytesRequest
 	return nil, nil
 }
 
-func (s *service) OnTimerTimeout(ctx context.Context, req *TimerTimeoutRequest) (*EmptySuccess, error) {
-	cli, ok := s.storage.GetClient(req.GetConn())
+func (s *service) OnTimerTimeout(ctx context.Context, req *proto.TimerTimeoutRequest) (*proto.EmptySuccess, error) {
+	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
 		return nil, nil
 	}
 
-	if err := cli.OnTimerTimeout(ctx, req.GetType()); err != nil {
-		cli.Log.Error("timer timeout", zap.Error(err))
+	if err := c.OnTimerTimeout(ctx, req.GetType()); err != nil {
+		c.Log.Error("handle timer", zap.Error(err))
 
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
@@ -136,16 +127,16 @@ func (s *service) OnTimerTimeout(ctx context.Context, req *TimerTimeoutRequest) 
 	return nil, nil
 }
 
-func (s *service) OnReceivedMessages(ctx context.Context, req *ReceivedMessagesRequest) (*EmptySuccess, error) {
-	cli, ok := s.storage.GetClient(req.GetConn())
+func (s *service) OnReceivedMessages(ctx context.Context, req *proto.ReceivedMessagesRequest) (*proto.EmptySuccess, error) {
+	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
 		return nil, nil
 	}
 
 	for _, msg := range req.GetMessages() {
-		if err := cli.OnReceivedMessage(ctx, msg); err != nil {
-			cli.Log.Error("received message", zap.Error(err))
+		if err := c.OnReceivedMessage(ctx, msg); err != nil {
+			c.Log.Error("handle message", zap.Error(err))
 
 			return nil, status.Error(codes.Unknown, err.Error())
 		}
