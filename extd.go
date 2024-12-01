@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/meha4j/extd/internal/auth"
-	"github.com/meha4j/extd/internal/mem"
-	"github.com/meha4j/extd/internal/proc"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -43,22 +40,8 @@ func main() {
 
 	defer net.Close()
 
-	storage := mem.NewStorage()
-	adapter, err := proc.NewAdapter(viper.GetString(PROC_ADAPTER_ADDR))
-
-	if err != nil {
-		panic(err)
-	}
-
-	rpc := grpc.NewServer()
-
-	proc.RegisterConnectionUnaryHandlerServer(rpc, proc.NewService(
-		storage,
-		adapter,
-		log.With(zap.String("svc", "proc")),
-	))
-	auth.RegisterHookProviderServer(rpc, auth.NewService(log.With(zap.String("svc", "auth"))))
+	srv := grpc.NewServer()
 
 	log.Info("Listening.", zap.String("addr", net.Addr().String()))
-	rpc.Serve(net)
+	srv.Serve(net)
 }
