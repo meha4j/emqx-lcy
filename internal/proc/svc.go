@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"go.uber.org/zap"
@@ -17,7 +18,7 @@ const (
 	ProtoName = "vcas"
 	ProtoVer  = "final"
 
-	AdapterAddr = "adapter.addr"
+	AdapterAddr = "adapter"
 )
 
 type service struct {
@@ -29,19 +30,33 @@ type service struct {
 	proto.UnimplementedConnectionUnaryHandlerServer
 }
 
-func NewService(log *zap.Logger) (proto.ConnectionUnaryHandlerServer, error) {
-	conn, err := grpc.NewClient(viper.GetString(AdapterAddr))
+func NewAdapter() (proto.ConnectionAdapterClient, error) {
+	addr := viper.GetString(AdapterAddr)
+
+	if addr == "" {
+		return nil, fmt.Errorf("adapter address does not provided.")
+	}
+
+	cred := grpc.WithTransportCredentials(insecure.NewCredentials())
+	conn, err := grpc.NewClient(addr, cred)
 
 	if err != nil {
 		return nil, fmt.Errorf("grpc client: %v", err)
 	}
 
-	adapter := proto.NewConnectionAdapterClient(conn)
-	store := &Store{}
+	return proto.NewConnectionAdapterClient(conn), nil
+}
+
+func NewService(log *zap.Logger) (proto.ConnectionUnaryHandlerServer, error) {
+	adapter, err := NewAdapter()
+
+	if err != nil {
+		return nil, fmt.Errorf("adapter: %v", err)
+	}
 
 	return &service{
 		Log:     log,
-		store:   store,
+		store:   NewStore(),
 		adapter: adapter,
 	}, nil
 }

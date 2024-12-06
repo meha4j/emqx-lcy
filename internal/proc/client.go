@@ -13,27 +13,25 @@ import (
 )
 
 type Packet struct {
-	Topic  string      `vcas:"name,n"`
+	Topic  string      `vcas:"name,n" json:"-"`
 	Stamp  vcas.Time   `vcas:"time,t" json:"timestamp"`
-	Method vcas.Method `vcas:"method,meth,m"`
-	Value  any         `vcas:"val,value,v" json:"value"`
+	Method vcas.Method `vcas:"method,meth,m" json:"-"`
+	Value  any         `vcas:"val,value,v" json:"value,omitempty"`
 
-	Units       string `vcas:"units"`
-	Description string `vcas:"descr"`
-	Type        string `vcas:"type"`
+	Units       string `vcas:"units" json:"-"`
+	Description string `vcas:"descr" json:"-"`
+	Type        string `vcas:"type" json:"-"`
 }
 
-type Observer struct {
-	string
-}
+type observer = string
 
 type Client struct {
 	Conn string
 	Log  *zap.Logger
 
+	obs observer
 	buf []byte
 	pkt Packet
-	obs Observer
 	mut sync.Mutex
 
 	adapter proto.ConnectionAdapterClient
@@ -64,7 +62,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 			return fmt.Errorf("unmarshal: %v", err)
 		}
 
-		if err := c.handlePacket(ctx); err != nil {
+		if err := c.handlePacket(ctx, &c.pkt); err != nil {
 			return fmt.Errorf("handle: %v", err)
 		}
 
@@ -78,14 +76,18 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-func (c *Client) handlePacket(ctx context.Context) error {
-	if c.obs.string != "" {
+func (c *Client) handlePacket(ctx context.Context, pkt *Packet) error {
+	if c.obs != "" {
 		return nil
+	}
+
+	if pkt.Topic == "" {
+		return fmt.Errorf("unknown topic")
 	}
 
 	switch c.pkt.Method {
 	case vcas.PUB:
-		return c.publish(ctx)
+		return c.publish(ctx, &c.pkt)
 	case vcas.SUB:
 		return c.subscribe(ctx, c.pkt.Topic)
 	case vcas.USB:
@@ -93,67 +95,16 @@ func (c *Client) handlePacket(ctx context.Context) error {
 	case vcas.GET:
 		return c.get(ctx, c.pkt.Topic)
 	default:
-		return fmt.Errorf("method not found")
+		return fmt.Errorf("unknown method")
 	}
 }
 
-func (c *Client) OnTimerTimeout(ctx context.Context, ttp proto.TimerType) error { return nil }
-
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) error {
-	c.mut.Lock()
-	defer c.mut.Unlock()
-
-	if c.obs.string != "" {
-		if c.obs.string != msg.GetTopic() {
-			return nil
-		}
-
-		c.obs.string = ""
-
-		if err := c.unsubscribe(ctx, msg.GetTopic()); err != nil {
-			return fmt.Errorf("unsubscribe: %v", err)
-		}
+func (c *Client) publish(ctx context.Context, pkt *Packet) error {
+	if pkt.Stamp.Time.IsZero() {
+		pkt.Stamp.Time = time.Now()
 	}
 
-	c.pkt.Topic = msg.GetTopic()
-	err := json.Unmarshal(msg.GetPayload(), &c.pkt)
-
-	if err != nil {
-		return fmt.Errorf("parse: %v", err)
-	}
-
-	if err := c.send(ctx); err != nil {
-		return fmt.Errorf("send: %v", err)
-	}
-
-	return nil
-}
-
-func (c *Client) send(ctx context.Context) error {
-	txt, err := vcas.Marshal(c.pkt)
-
-	if err != nil {
-		return fmt.Errorf("marshal: %v", err)
-	}
-
-	res, err := c.adapter.Send(ctx, &proto.SendBytesRequest{
-		Conn:  c.Conn,
-		Bytes: txt,
-	})
-
-	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
-	}
-
-	if res.GetCode() != proto.ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
-	}
-
-	return nil
-}
-
-func (c *Client) publish(ctx context.Context) error {
-	pay, err := json.Marshal(c.pkt)
+	pay, err := json.Marshal(pkt)
 
 	if err != nil {
 		return fmt.Errorf("marshal: %v", err)
@@ -161,7 +112,7 @@ func (c *Client) publish(ctx context.Context) error {
 
 	res, err := c.adapter.Publish(ctx, &proto.PublishRequest{
 		Conn:    c.Conn,
-		Topic:   c.pkt.Topic,
+		Topic:   pkt.Topic,
 		Qos:     0,
 		Payload: pay,
 	})
@@ -223,25 +174,79 @@ func (c *Client) get(ctx context.Context, top string) error {
 		c.mut.Lock()
 		defer c.mut.Unlock()
 
-		if c.obs.string != "" {
-			c.obs.string = ""
+		if c.obs != "" {
+			c.obs = ""
+
+			p := &Packet{Topic: top}
 
 			c.unsubscribe(ctx, top)
-			c.empty(top)
-			c.send(ctx)
+			c.send(ctx, p)
 		}
 	})
 
 	return nil
 }
 
-func (c *Client) empty(top string) {
-	c.pkt.Topic = top
-	c.pkt.Stamp.Time = time.Now()
-	c.pkt.Method = vcas.PUB
+func (c *Client) OnTimerTimeout(ctx context.Context, ttp proto.TimerType) error { return nil }
 
-	c.pkt.Description = "-"
-	c.pkt.Value = "none"
-	c.pkt.Units = "-"
-	c.pkt.Type = "rw"
+func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) error {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	if c.obs != "" {
+		if c.obs != msg.GetTopic() {
+			return nil
+		}
+
+		c.obs = ""
+
+		if err := c.unsubscribe(ctx, msg.GetTopic()); err != nil {
+			return fmt.Errorf("unsubscribe: %v", err)
+		}
+	}
+
+	pkt := &Packet{Topic: msg.GetTopic()}
+	err := json.Unmarshal(msg.GetPayload(), pkt)
+
+	if err != nil {
+		return fmt.Errorf("parse: %v", err)
+	}
+
+	if err := c.send(ctx, pkt); err != nil {
+		return fmt.Errorf("send: %v", err)
+	}
+
+	return nil
+}
+
+func (c *Client) send(ctx context.Context, pkt *Packet) error {
+	if pkt.Value == nil {
+		pkt.Value = "none"
+	}
+
+	pkt.Method = vcas.PUB
+	pkt.Description = "-"
+	pkt.Units = "-"
+	pkt.Type = "rw"
+
+	txt, err := vcas.Marshal(pkt)
+
+	if err != nil {
+		return fmt.Errorf("marshal: %v", err)
+	}
+
+	res, err := c.adapter.Send(ctx, &proto.SendBytesRequest{
+		Conn:  c.Conn,
+		Bytes: append(txt, 10),
+	})
+
+	if err != nil {
+		return fmt.Errorf("adapter: %v", err)
+	}
+
+	if res.GetCode() != proto.ResultCode_SUCCESS {
+		return fmt.Errorf(res.GetMessage())
+	}
+
+	return nil
 }

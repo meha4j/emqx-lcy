@@ -20,10 +20,10 @@ const (
 
 type Method int
 
-func (m *Method) MarshalText() ([]byte, error) {
+func (m Method) MarshalText() ([]byte, error) {
 	var s string
 
-	switch *m {
+	switch m {
 	case PUB:
 		s = "set"
 	case SUB:
@@ -33,7 +33,7 @@ func (m *Method) MarshalText() ([]byte, error) {
 	case GET:
 		s = "get"
 	default:
-		return nil, fmt.Errorf("unknown method id: %v", *m)
+		return nil, fmt.Errorf("unknown method id: %v", m)
 	}
 
 	return []byte(s), nil
@@ -62,7 +62,7 @@ type Time struct {
 	time.Time
 }
 
-func (t *Time) MarshalText() ([]byte, error) {
+func (t Time) MarshalText() ([]byte, error) {
 	return []byte(t.Format(Stamp)), nil
 }
 
@@ -209,7 +209,7 @@ func unmarshalMap(tok map[string]string, v *reflect.Value) error {
 	}
 
 	for mk, mv := range tok {
-		rv := reflect.New(v.Type())
+		rv := reflect.New(v.Type().Elem())
 
 		if err := unmarshal([]byte(mv), &rv); err != nil {
 			return fmt.Errorf("value unmarshal: %v", err)

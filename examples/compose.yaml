@@ -1,9 +1,20 @@
+volumes:
+  emqx-data:
+    name: emqx-data
+  emqx-log:
+    name: emqx-log
+
 networks:
-  mqtt:
-    driver: bridge
+  nano:
+    driver: overlay
     ipam:
       config:
         - subnet: 10.5.0.0/16
+  test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.6.0.0/16
 
 services:
   emqx:
@@ -13,18 +24,25 @@ services:
       - "1883:1883"
       - "18083:18083"
       - "20041:20041"
+    environment:
+      EMQX_NAME: emqx
+      EMQX_HOST: emqx
     networks:
-      mqtt:
-        ipv4_address: 10.5.0.5
+      - test
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    deploy:
+      placement:
+        constraints: [ node.hostname == earth ]
 
   extd:
     image: ghcr.io/blabtm/extd:latest
     ports:
-      - "9111:9111"
+      - "9111:80"
     environment:
-      EXTD_PORT: 9111
-      EXTD_PROC_ADAPTER_ADDR: 10.5.0.5:9110
+      EXTD_ADAPTER: emqx:9110
+      TZ: Asia/Novosibirsk
     networks:
-      mqtt:
-        ipv4_address: 10.5.0.6
+      - test
 

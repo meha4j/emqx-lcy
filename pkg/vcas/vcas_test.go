@@ -8,8 +8,9 @@ import (
 )
 
 type person struct {
-	Name string `vcas:"name"`
-	Age  int    `vcas:"age"`
+	Name   string `vcas:"name"`
+	Age    int    `vcas:"age"`
+	Method Method `vcas:"method"`
 }
 
 type student struct {
@@ -262,9 +263,10 @@ func TestUnmarshalBool(t *testing.T) {
 func TestUnmarshalStruct(t *testing.T) {
 	var p person
 
-	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18"), &p))
+	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18|method:subscr"), &p))
 	assert.Equal(t, "Dasha", p.Name)
 	assert.Equal(t, 18, p.Age)
+	assert.Equal(t, SUB, p.Method)
 }
 
 func TestUnmarshalEmbeddedStruct(t *testing.T) {
@@ -397,21 +399,23 @@ func TestMarshalBool(t *testing.T) {
 
 func TestMarshalStruct(t *testing.T) {
 	p := person{
-		Name: "Dasha",
-		Age:  18,
+		Name:   "Dasha",
+		Age:    18,
+		Method: PUB,
 	}
 
 	m, err := Marshal(&p)
 
 	assert.Nil(t, err)
-	assert.Equal(t, "name:Dasha|age:18", string(m))
+	assert.Equal(t, "name:Dasha|age:18|method:set", string(m))
 }
 
 func TestMarshalEmbeddedStruct(t *testing.T) {
 	s := student{
 		person: person{
-			Name: "Dasha",
-			Age:  18,
+			Name:   "Dasha",
+			Age:    18,
+			Method: PUB,
 		},
 		Score: 5.5,
 	}
@@ -419,7 +423,7 @@ func TestMarshalEmbeddedStruct(t *testing.T) {
 	m, err := Marshal(&s)
 
 	assert.Nil(t, err)
-	assert.Equal(t, "name:Dasha|age:18|score:5.5", string(m))
+	assert.Equal(t, "name:Dasha|age:18|method:set|score:5.5", string(m))
 }
 
 func TestMarshalMap(t *testing.T) {
