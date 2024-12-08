@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meha4j/extd/internal/proc/proto"
-	"github.com/meha4j/extd/pkg/vcas"
+	"github.com/paraskun/extd/internal/proc/proto"
+	"github.com/paraskun/extd/pkg/vcas"
 	"go.uber.org/zap"
 )
 

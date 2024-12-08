@@ -3,9 +3,9 @@ package proc
 import (
 	context "context"
 	"fmt"
+	"os"
 
-	"github.com/meha4j/extd/internal/proc/proto"
-	"github.com/spf13/viper"
+	"github.com/paraskun/extd/internal/proc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -18,7 +18,7 @@ const (
 	ProtoName = "vcas"
 	ProtoVer  = "final"
 
-	AdapterAddr = "adapter"
+	AdapterAddr = "EXTD_ADAPTER_ADDR"
 )
 
 type service struct {
@@ -31,7 +31,7 @@ type service struct {
 }
 
 func NewAdapter() (proto.ConnectionAdapterClient, error) {
-	addr := viper.GetString(AdapterAddr)
+	addr := os.Getenv(AdapterAddr)
 
 	if addr == "" {
 		return nil, fmt.Errorf("adapter address does not provided.")
