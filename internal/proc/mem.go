@@ -7,6 +7,12 @@ type Store struct {
 	mut sync.Mutex
 }
 
+func NewStore() *Store {
+	return &Store{
+		dat: make(map[string]*Client, 5000),
+	}
+}
+
 func (s *Store) PutClient(conn string, client *Client) {
 	s.mut.Lock()
 	defer s.mut.Unlock()

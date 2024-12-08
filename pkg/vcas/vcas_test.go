@@ -8,8 +8,9 @@ import (
 )
 
 type person struct {
-	Name string `vcas:"name"`
-	Age  int    `vcas:"age"`
+	Name   string `vcas:"name"`
+	Age    int    `vcas:"age"`
+	Method Method `vcas:"method"`
 }
 
 type student struct {
@@ -388,8 +389,9 @@ func TestMarshalBool(t *testing.T) {
 func TestMarshalStruct(t *testing.T) {
 	s := student{
 		person: person{
-			Name: "Dasha",
-			Age:  18,
+			Name:   "Dasha",
+			Age:    18,
+			Method: PUB,
 		},
 		Grades: []float64{4.8, 4.9, 5.0},
 	}
