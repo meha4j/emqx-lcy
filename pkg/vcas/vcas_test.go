@@ -15,44 +15,43 @@ type person struct {
 type student struct {
 	person
 
-	Score float64 `vcas:"score"`
+	Grades []float64 `vcas:"grades"`
 }
 
 func TestMethodMarshalPub(t *testing.T) {
-	m := PUB
-	b, err := m.MarshalText()
+	var m Method = PUB
+	b, err := Marshal(m)
 
 	assert.Nil(t, err)
-	assert.Equal(t, string(b), "set")
+	assert.Equal(t, "set", string(b))
 }
 
 func TestMethodMarshalSub(t *testing.T) {
-	m := SUB
-	b, err := m.MarshalText()
+	var m Method = SUB
+	b, err := Marshal(m)
 
 	assert.Nil(t, err)
-	assert.Equal(t, string(b), "subscribe")
+	assert.Equal(t, "subscribe", string(b))
 }
 
 func TestMethodMarshalUsb(t *testing.T) {
-	m := USB
-	b, err := m.MarshalText()
+	var m Method = USB
+	b, err := Marshal(m)
 
 	assert.Nil(t, err)
-	assert.Equal(t, string(b), "release")
+	assert.Equal(t, "release", string(b))
 }
 
 func TestMethodMarshalGet(t *testing.T) {
-	m := GET
-	b, err := m.MarshalText()
+	var m Method = GET
+	b, err := Marshal(m)
 
 	assert.Nil(t, err)
-	assert.Equal(t, string(b), "get")
+	assert.Equal(t, "get", string(b))
 }
 
 func TestMethodMarshalUnknownError(t *testing.T) {
-	m := Method(-1)
-	_, err := m.MarshalText()
+	_, err := Marshal(Method(-1))
 
 	assert.NotNil(t, err)
 }
@@ -60,61 +59,60 @@ func TestMethodMarshalUnknownError(t *testing.T) {
 func TestMethodUnmarshalPub(t *testing.T) {
 	var m Method
 
-	assert.Nil(t, m.UnmarshalText([]byte("s")))
+	assert.Nil(t, Unmarshal([]byte("s"), &m))
 	assert.Equal(t, PUB, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("set")))
+	assert.Nil(t, Unmarshal([]byte("set"), &m))
 	assert.Equal(t, PUB, m)
 }
 
 func TestMethodUnmarshalSub(t *testing.T) {
 	var m Method
 
-	assert.Nil(t, m.UnmarshalText([]byte("sb")))
+	assert.Nil(t, Unmarshal([]byte("sb"), &m))
 	assert.Equal(t, SUB, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("subscr")))
+	assert.Nil(t, Unmarshal([]byte("subscr"), &m))
 	assert.Equal(t, SUB, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("subscribe")))
+	assert.Nil(t, Unmarshal([]byte("subscribe"), &m))
 	assert.Equal(t, SUB, m)
 }
 
 func TestMethodUnmarshalUsb(t *testing.T) {
 	var m Method
 
-	assert.Nil(t, m.UnmarshalText([]byte("rel")))
+	assert.Nil(t, Unmarshal([]byte("rel"), &m))
 	assert.Equal(t, USB, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("release")))
+	assert.Nil(t, Unmarshal([]byte("release"), &m))
 	assert.Equal(t, USB, m)
 }
 
 func TestMethodUnmarshalGet(t *testing.T) {
 	var m Method
 
-	assert.Nil(t, m.UnmarshalText([]byte("g")))
+	assert.Nil(t, Unmarshal([]byte("g"), &m))
 	assert.Equal(t, GET, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("gf")))
+	assert.Nil(t, Unmarshal([]byte("gf"), &m))
 	assert.Equal(t, GET, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("get")))
+	assert.Nil(t, Unmarshal([]byte("get"), &m))
 	assert.Equal(t, GET, m)
 
-	assert.Nil(t, m.UnmarshalText([]byte("getfull")))
+	assert.Nil(t, Unmarshal([]byte("getfull"), &m))
 	assert.Equal(t, GET, m)
 }
 
 func TestMethodUnmarshalUnknownError(t *testing.T) {
 	var m Method
 
-	assert.NotNil(t, m.UnmarshalText([]byte("unknown")))
+	assert.NotNil(t, Unmarshal([]byte("unknown"), &m))
 }
 
 func TestTimeMarshal(t *testing.T) {
-	s := Time{time.UnixMilli(1118509199999)}
-	b, err := s.MarshalText()
+	b, err := Marshal(Time{time.UnixMilli(1118509199999)})
 
 	assert.Nil(t, err)
 	assert.Equal(t, "11.06.2005 23_59_59.999", string(b))
@@ -123,14 +121,14 @@ func TestTimeMarshal(t *testing.T) {
 func TestTimeUnmarshal(t *testing.T) {
 	var s Time
 
-	assert.Nil(t, s.UnmarshalText([]byte("11.06.2005 23_59_59.999")))
+	assert.Nil(t, Unmarshal([]byte("11.06.2005 23_59_59.999"), &s))
 	assert.Equal(t, int64(1118509199999), s.UnixMilli())
 }
 
 func TestTimeUnmarshalMalformedError(t *testing.T) {
 	var s Time
 
-	assert.NotNil(t, s.UnmarshalText([]byte("11.06.2005 23:59:59.999")))
+	assert.NotNil(t, Unmarshal([]byte("11.06.2005 23:59:59.999"), &s))
 }
 
 func TestTimeMarshalJson(t *testing.T) {
@@ -260,24 +258,16 @@ func TestUnmarshalBool(t *testing.T) {
 }
 
 func TestUnmarshalStruct(t *testing.T) {
-	var p person
-
-	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18"), &p))
-	assert.Equal(t, "Dasha", p.Name)
-	assert.Equal(t, 18, p.Age)
-}
-
-func TestUnmarshalEmbeddedStruct(t *testing.T) {
 	var s student
 
-	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18|score:5.0"), &s))
+	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18|grades:4.8,4.9,5.0"), &s))
 	assert.Equal(t, "Dasha", s.Name)
 	assert.Equal(t, 18, s.Age)
-	assert.Equal(t, float64(5.0), s.Score)
+	assert.Equal(t, []float64{4.8, 4.9, 5.0}, s.Grades)
 }
 
 func TestUnmarshalMap(t *testing.T) {
-	var m map[string]string = make(map[string]string, 2)
+	m := make(map[string]string, 2)
 
 	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18"), &m))
 	assert.Contains(t, m, "name")
@@ -396,30 +386,18 @@ func TestMarshalBool(t *testing.T) {
 }
 
 func TestMarshalStruct(t *testing.T) {
-	p := person{
-		Name: "Dasha",
-		Age:  18,
-	}
-
-	m, err := Marshal(&p)
-
-	assert.Nil(t, err)
-	assert.Equal(t, "name:Dasha|age:18", string(m))
-}
-
-func TestMarshalEmbeddedStruct(t *testing.T) {
 	s := student{
 		person: person{
 			Name: "Dasha",
 			Age:  18,
 		},
-		Score: 5.5,
+		Grades: []float64{4.8, 4.9, 5.0},
 	}
 
 	m, err := Marshal(&s)
 
 	assert.Nil(t, err)
-	assert.Equal(t, "name:Dasha|age:18|score:5.5", string(m))
+	assert.Equal(t, "name:Dasha|age:18|grades:4.8,4.9,5", string(m))
 }
 
 func TestMarshalMap(t *testing.T) {

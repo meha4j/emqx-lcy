@@ -20,10 +20,10 @@ const (
 
 type Method int
 
-func (m *Method) MarshalText() ([]byte, error) {
+func (m Method) MarshalText() ([]byte, error) {
 	var s string
 
-	switch *m {
+	switch m {
 	case PUB:
 		s = "set"
 	case SUB:
@@ -33,7 +33,7 @@ func (m *Method) MarshalText() ([]byte, error) {
 	case GET:
 		s = "get"
 	default:
-		return nil, fmt.Errorf("unknown method id: %v", *m)
+		return nil, fmt.Errorf("unknown method id: %v", m)
 	}
 
 	return []byte(s), nil
@@ -62,18 +62,20 @@ type Time struct {
 	time.Time
 }
 
-func (t *Time) MarshalText() ([]byte, error) {
+func (t Time) MarshalText() ([]byte, error) {
 	return []byte(t.Format(Stamp)), nil
 }
 
 func (t *Time) UnmarshalText(b []byte) error {
 	tm, err := time.ParseInLocation(Stamp, string(b), time.Local)
 
-	if err == nil {
-		t.Time = tm
+	if err != nil {
+		return fmt.Errorf("parse formatted: %v", err)
 	}
 
-	return err
+	t.Time = tm
+
+	return nil
 }
 
 func (t Time) MarshalJSON() ([]byte, error) {
@@ -107,13 +109,25 @@ func unmarshal(b []byte, v *reflect.Value) error {
 
 	if v.CanInterface() {
 		if t, ok := v.Interface().(encoding.TextUnmarshaler); ok {
-			return t.UnmarshalText(b)
+			err := t.UnmarshalText(b)
+
+			if err != nil {
+				return fmt.Errorf("custom: %v", err)
+			}
+
+			return nil
 		}
 	}
 
 	if v.CanAddr() && v.Addr().CanInterface() {
 		if t, ok := v.Addr().Interface().(encoding.TextUnmarshaler); ok {
-			return t.UnmarshalText(b)
+			err := t.UnmarshalText(b)
+
+			if err != nil {
+				return fmt.Errorf("custom: %v", err)
+			}
+
+			return nil
 		}
 	}
 
@@ -190,11 +204,15 @@ func unmarshal(b []byte, v *reflect.Value) error {
 		}
 	case reflect.Map:
 		if err := unmarshalMap(parseMap(m), v); err != nil {
-			return fmt.Errorf("map unmarshal: %v", err)
+			return fmt.Errorf("map: %v", err)
+		}
+	case reflect.Slice:
+		if err := unmarshalSlice(parseSlice(m), v); err != nil {
+			return fmt.Errorf("slice: %v", err)
 		}
 	case reflect.Struct:
 		if err := unmarshalStruct(parseMap(m), v); err != nil {
-			return fmt.Errorf("struct unmarshal: %v", err)
+			return fmt.Errorf("struct: %v", err)
 		}
 	default:
 		return fmt.Errorf("unsupported type")
@@ -209,13 +227,27 @@ func unmarshalMap(tok map[string]string, v *reflect.Value) error {
 	}
 
 	for mk, mv := range tok {
-		rv := reflect.New(v.Type())
+		e := reflect.New(v.Type().Elem())
 
-		if err := unmarshal([]byte(mv), &rv); err != nil {
-			return fmt.Errorf("value unmarshal: %v", err)
+		if err := unmarshal([]byte(mv), &e); err != nil {
+			return fmt.Errorf("token: %v", err)
 		}
 
-		v.SetMapIndex(reflect.ValueOf(mk), rv.Elem())
+		v.SetMapIndex(reflect.ValueOf(mk), e.Elem())
+	}
+
+	return nil
+}
+
+func unmarshalSlice(tok []string, v *reflect.Value) error {
+	for _, sv := range tok {
+		e := reflect.New(v.Type().Elem())
+
+		if err := unmarshal([]byte(sv), &e); err != nil {
+			return fmt.Errorf("token: %v", err)
+		}
+
+		v.Set(reflect.Append(*v, e.Elem()))
 	}
 
 	return nil
@@ -226,30 +258,29 @@ func unmarshalStruct(tok map[string]string, v *reflect.Value) error {
 
 	for i := range t.NumField() {
 		f := v.Field(i)
-		n, ok := t.Field(i).Tag.Lookup("vcas")
 
-		if !ok {
-			switch f.Type().Kind() {
-			case reflect.Struct:
-				if err := unmarshalStruct(tok, &f); err != nil {
-					return fmt.Errorf("embedded struct unmarshal: %v", err)
-				}
-			case reflect.Map:
-				if err := unmarshalMap(tok, &f); err != nil {
-					return fmt.Errorf("inner map unmarshal: %v", err)
-				}
+		switch f.Type().Kind() {
+		case reflect.Map:
+			return fmt.Errorf("unsupported field type")
+		case reflect.Struct:
+			if err := unmarshalStruct(tok, &f); err != nil {
+				return fmt.Errorf("embedded struct: %v", err)
+			}
+		default:
+			alias, ok := t.Field(i).Tag.Lookup("vcas")
+
+			if !ok {
+				continue
 			}
 
-			continue
-		}
+			for _, a := range strings.Split(alias, ",") {
+				if v, ok := tok[a]; ok {
+					if err := unmarshal([]byte(v), &f); err != nil {
+						return fmt.Errorf("field: %v", err)
+					}
 
-		for _, n := range strings.Split(n, ",") {
-			if v, ok := tok[n]; ok {
-				if err := unmarshal([]byte(v), &f); err != nil {
-					return fmt.Errorf("field unmarshal: %v", err)
+					break
 				}
-
-				break
 			}
 		}
 	}
@@ -273,13 +304,17 @@ func parseMap(m string) map[string]string {
 	return tok
 }
 
+func parseSlice(m string) []string {
+	return strings.Split(m, ",")
+}
+
 func Marshal(a any) ([]byte, error) {
 	var b strings.Builder
 
 	v := reflect.ValueOf(a)
 
 	if err := marshal(&v, &b); err != nil {
-		return nil, fmt.Errorf("object marshal: %v", err)
+		return nil, err
 	}
 
 	return []byte(b.String()), nil
@@ -297,7 +332,7 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 			txt, err := t.MarshalText()
 
 			if err != nil {
-				return fmt.Errorf("custom marshal: %v", err)
+				return fmt.Errorf("custom: %v", err)
 			}
 
 			b.Write(txt)
@@ -311,7 +346,7 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 			txt, err := t.MarshalText()
 
 			if err != nil {
-				return fmt.Errorf("custom marshal: %v", err)
+				return fmt.Errorf("custom: %v", err)
 			}
 
 			b.Write(txt)
@@ -337,11 +372,15 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 		b.WriteString(fmt.Sprint(v.Bool()))
 	case reflect.Map:
 		if err := marshalMap(v, b); err != nil {
-			return fmt.Errorf("map marshal: %v", err)
+			return fmt.Errorf("map: %v", err)
+		}
+	case reflect.Slice:
+		if err := marshalSlice(v, b); err != nil {
+			return fmt.Errorf("slice: %v", err)
 		}
 	case reflect.Struct:
 		if err := marshalStruct(v, b); err != nil {
-			return fmt.Errorf("struct marshal: %v", err)
+			return fmt.Errorf("struct: %v", err)
 		}
 	default:
 		return fmt.Errorf("unsupported type")
@@ -353,22 +392,38 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 func marshalMap(v *reflect.Value, b *strings.Builder) error {
 	iter := v.MapRange()
 
-	for iter.Next() {
+	for i := 0; iter.Next(); i++ {
 		key := iter.Key()
 		val := iter.Value()
 
-		if b.Len() != 0 {
+		if i != 0 {
 			b.WriteRune('|')
 		}
 
 		if err := marshal(&key, b); err != nil {
-			return fmt.Errorf("key marshal: %v", err)
+			return fmt.Errorf("token: key: %v", err)
 		}
 
 		b.WriteRune(':')
 
 		if err := marshal(&val, b); err != nil {
-			return fmt.Errorf("value marshal: %v", err)
+			return fmt.Errorf("token: value: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func marshalSlice(v *reflect.Value, b *strings.Builder) error {
+	for i := range v.Len() {
+		if i != 0 {
+			b.WriteRune(',')
+		}
+
+		e := v.Index(i)
+
+		if err := marshal(&e, b); err != nil {
+			return fmt.Errorf("token: %v", err)
 		}
 	}
 
@@ -379,35 +434,36 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 	t := v.Type()
 
 	for i := range t.NumField() {
-		n, ok := t.Field(i).Tag.Lookup("vcas")
 		f := v.Field(i)
 
-		if !ok {
-			switch f.Type().Kind() {
-			case reflect.Struct:
-				if err := marshalStruct(&f, b); err != nil {
-					return fmt.Errorf("embedded struct marshal: %v", err)
-				}
-			case reflect.Map:
-				if err := marshalMap(&f, b); err != nil {
-					return fmt.Errorf("inner map marshal: %v", err)
-				}
+		switch f.Type().Kind() {
+		case reflect.Map:
+			if err := marshalMap(&f, b); err != nil {
+				return fmt.Errorf("embedded map: %v", err)
+			}
+		case reflect.Struct:
+			if err := marshalStruct(&f, b); err != nil {
+				return fmt.Errorf("embedded struct: %v", err)
+			}
+		default:
+			a, ok := t.Field(i).Tag.Lookup("vcas")
+
+			if !ok {
+				continue
 			}
 
-			continue
-		}
+			a = strings.Split(a, ",")[0]
 
-		n = strings.Split(n, ",")[0]
+			if b.Len() != 0 {
+				b.WriteRune('|')
+			}
 
-		if b.Len() != 0 {
-			b.WriteRune('|')
-		}
+			b.WriteString(a)
+			b.WriteRune(':')
 
-		b.WriteString(n)
-		b.WriteRune(':')
-
-		if err := marshal(&f, b); err != nil {
-			return fmt.Errorf("field marshal: %v", err)
+			if err := marshal(&f, b); err != nil {
+				return fmt.Errorf("field: %v", err)
+			}
 		}
 	}
 

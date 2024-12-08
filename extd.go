@@ -1,33 +1,25 @@
 package main
 
 import (
-	"fmt"
 	"net"
 
-	"github.com/meha4j/extd/internal/proc"
-	"github.com/meha4j/extd/internal/proc/proto"
-	"github.com/spf13/viper"
+	"github.com/paraskun/extd/internal/proc"
+	"github.com/paraskun/extd/internal/proc/proto"
+
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
-const (
-	Port = "port"
-)
-
-func init() {
-	viper.SetEnvPrefix("extd")
-}
-
 func main() {
 	log, err := zap.NewProduction()
-	defer log.Sync()
 
 	if err != nil {
 		panic(err)
 	}
 
-	net, err := net.Listen("tcp", fmt.Sprintf(":%v", viper.GetInt(Port)))
+	defer log.Sync()
+
+	net, err := net.Listen("tcp", ":80")
 
 	if err != nil {
 		panic(err)
@@ -43,6 +35,5 @@ func main() {
 	}
 
 	proto.RegisterConnectionUnaryHandlerServer(srv, svc)
-	log.Info("Listening.", zap.String("addr", net.Addr().String()))
 	srv.Serve(net)
 }
