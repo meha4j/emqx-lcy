@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/paraskun/extd/internal/proc/proto"
+	"github.com/paraskun/extd/pkg/emqx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -15,10 +16,12 @@ import (
 )
 
 const (
-	ProtoName = "vcas"
-	ProtoVer  = "final"
+	ProtoName = "VCAS"
+	ProtoVer  = "2.0.0-SNAPSHOT"
 
-	AdapterAddr = "EXTD_ADAPTER_ADDR"
+	EmqxAddr = "EXTD_EMQX_ADDR"
+	Username = "EXTD_USERNAME"
+	Password = "EXTD_PASSWORD"
 )
 
 type service struct {
@@ -30,13 +33,7 @@ type service struct {
 	proto.UnimplementedConnectionUnaryHandlerServer
 }
 
-func NewAdapter() (proto.ConnectionAdapterClient, error) {
-	addr := os.Getenv(AdapterAddr)
-
-	if addr == "" {
-		return nil, fmt.Errorf("adapter address does not provided.")
-	}
-
+func NewAdapter(addr string) (proto.ConnectionAdapterClient, error) {
 	cred := grpc.WithTransportCredentials(insecure.NewCredentials())
 	conn, err := grpc.NewClient(addr, cred)
 
@@ -48,10 +45,25 @@ func NewAdapter() (proto.ConnectionAdapterClient, error) {
 }
 
 func NewService(log *zap.Logger) (proto.ConnectionUnaryHandlerServer, error) {
-	adapter, err := NewAdapter()
+	addr := os.Getenv(EmqxAddr)
+	name := os.Getenv(Username)
+	pass := os.Getenv(Password)
+
+	if addr == "" {
+		return nil, fmt.Errorf("emqx address does not provided.")
+	}
+
+	adapter, err := NewAdapter(addr)
 
 	if err != nil {
 		return nil, fmt.Errorf("adapter: %v", err)
+	}
+
+	client := emqx.NewClient(addr+"/api/v5", name, pass)
+	err = client.UpdateProtoGateway()
+
+	if err != nil {
+		return nil, fmt.Errorf("update configuration: %v", err)
 	}
 
 	return &service{

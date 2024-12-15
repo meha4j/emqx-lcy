@@ -6,15 +6,10 @@ volumes:
 
 networks:
   nano:
-    driver: overlay
-    ipam:
-      config:
-        - subnet: 10.5.0.0/16
-  test:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.6.0.0/16
+        - subnet: 10.5.0.0/16
 
 services:
   emqx:
@@ -27,8 +22,9 @@ services:
     environment:
       EMQX_NAME: emqx
       EMQX_HOST: emqx
+      EMQX_API_KEY__BOOTSTRAP_FILE: /opt/emqx/data/mnesia/emqx@emqx/security.conf
     networks:
-      - test
+      - nano
     volumes:
       - emqx-data:/opt/emqx/data
       - emqx-log:/opt/emqx/log
@@ -41,8 +37,12 @@ services:
     ports:
       - "9111:80"
     environment:
-      EXTD_ADAPTER: emqx:9110
+      EXTD_EMQX_ADDR: emqx:18083
+      EXTD_USERNAME: extd
+      EXTD_PASSWORD: 8b24c3fcd711
       TZ: Asia/Novosibirsk
     networks:
-      - test
-
+      - nano
+    deploy:
+      placement:
+        constraints: [ node.hostname == pluto ]

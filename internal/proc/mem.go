@@ -4,7 +4,7 @@ import "sync"
 
 type Store struct {
 	dat map[string]*Client
-	mut sync.Mutex
+	mut sync.RWMutex
 }
 
 func NewStore() *Store {
@@ -21,8 +21,8 @@ func (s *Store) PutClient(conn string, client *Client) {
 }
 
 func (s *Store) GetClientByConn(conn string) (*Client, bool) {
-	s.mut.Lock()
-	defer s.mut.Unlock()
+	s.mut.RLock()
+	defer s.mut.RUnlock()
 
 	c, ok := s.dat[conn]
 

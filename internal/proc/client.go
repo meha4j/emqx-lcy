@@ -170,24 +170,38 @@ func (c *Client) get(ctx context.Context, top string) error {
 		return fmt.Errorf("subscribe: %v", err)
 	}
 
-	time.AfterFunc(5*time.Second, func() {
-		c.mut.Lock()
-		defer c.mut.Unlock()
-
-		if c.obs != "" {
-			c.obs = ""
-
-			p := &Packet{Topic: top}
-
-			c.unsubscribe(ctx, top)
-			c.send(ctx, p)
-		}
+	res, err := c.adapter.StartTimer(ctx, &proto.TimerRequest{
+		Conn:     c.Conn,
+		Type:     proto.TimerType_KEEPALIVE,
+		Interval: 5,
 	})
+
+	if err != nil {
+		return fmt.Errorf("adapter: %v", err)
+	}
+
+	if res.GetCode() != proto.ResultCode_SUCCESS {
+		return fmt.Errorf(res.GetMessage())
+	}
 
 	return nil
 }
 
-func (c *Client) OnTimerTimeout(ctx context.Context, ttp proto.TimerType) error { return nil }
+func (c *Client) OnTimerTimeout(ctx context.Context, ttp proto.TimerType) error {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	if c.obs != "" {
+		p := &Packet{Topic: c.obs}
+
+		c.unsubscribe(ctx, c.obs)
+		c.send(ctx, p)
+
+		c.obs = ""
+	}
+
+	return nil
+}
 
 func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) error {
 	c.mut.Lock()
