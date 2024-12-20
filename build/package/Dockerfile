@@ -16,6 +16,6 @@ FROM alpine
 
 COPY --from=builder /extd /
 
-EXPOSE 80
+EXPOSE 9111
 
 CMD ["/extd"]

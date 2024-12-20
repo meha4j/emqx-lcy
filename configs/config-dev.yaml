@@ -1,0 +1,17 @@
+extd:
+  port: 9111
+  emqx:
+    host: emqx
+    port: 18083
+    timeout: 15s
+  proc:
+    emqx:
+      adapter:
+        port: 9110
+      listener:
+        port: 20041
+  auth:
+    postgres:
+      host: postgres
+      port: 5432
+      name: extd

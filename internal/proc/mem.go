@@ -20,6 +20,13 @@ func (s *Store) PutClient(conn string, client *Client) {
 	s.dat[conn] = client
 }
 
+func (s *Store) RemoveClient(conn string) {
+	s.mut.Lock()
+	defer s.mut.Unlock()
+
+	s.dat[conn] = nil
+}
+
 func (s *Store) GetClientByConn(conn string) (*Client, bool) {
 	s.mut.RLock()
 	defer s.mut.RUnlock()

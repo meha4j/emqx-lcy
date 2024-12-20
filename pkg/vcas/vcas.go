@@ -10,6 +10,9 @@ import (
 )
 
 const (
+	Name    = "VCAS"
+	Version = "2.0.0-SNAPSHOT"
+
 	Stamp = "02.01.2006 15_04_05.000"
 
 	PUB Method = iota + 1
@@ -112,7 +115,7 @@ func unmarshal(b []byte, v *reflect.Value) error {
 			err := t.UnmarshalText(b)
 
 			if err != nil {
-				return fmt.Errorf("custom: %v", err)
+				return fmt.Errorf("provided: %v", err)
 			}
 
 			return nil
@@ -124,7 +127,7 @@ func unmarshal(b []byte, v *reflect.Value) error {
 			err := t.UnmarshalText(b)
 
 			if err != nil {
-				return fmt.Errorf("custom: %v", err)
+				return fmt.Errorf("provided: %v", err)
 			}
 
 			return nil
@@ -230,7 +233,7 @@ func unmarshalMap(tok map[string]string, v *reflect.Value) error {
 		e := reflect.New(v.Type().Elem())
 
 		if err := unmarshal([]byte(mv), &e); err != nil {
-			return fmt.Errorf("token: %v", err)
+			return fmt.Errorf("token (%s): %v", mk, err)
 		}
 
 		v.SetMapIndex(reflect.ValueOf(mk), e.Elem())
@@ -240,11 +243,11 @@ func unmarshalMap(tok map[string]string, v *reflect.Value) error {
 }
 
 func unmarshalSlice(tok []string, v *reflect.Value) error {
-	for _, sv := range tok {
+	for i, sv := range tok {
 		e := reflect.New(v.Type().Elem())
 
 		if err := unmarshal([]byte(sv), &e); err != nil {
-			return fmt.Errorf("token: %v", err)
+			return fmt.Errorf("token (%d): %v", i, err)
 		}
 
 		v.Set(reflect.Append(*v, e.Elem()))
@@ -261,10 +264,10 @@ func unmarshalStruct(tok map[string]string, v *reflect.Value) error {
 
 		switch f.Type().Kind() {
 		case reflect.Map:
-			return fmt.Errorf("unsupported field type")
+			return fmt.Errorf("unsupported field type (%d)", i)
 		case reflect.Struct:
 			if err := unmarshalStruct(tok, &f); err != nil {
-				return fmt.Errorf("embedded struct: %v", err)
+				return fmt.Errorf("embedded struct (%d): %v", i, err)
 			}
 		default:
 			alias, ok := t.Field(i).Tag.Lookup("vcas")
@@ -276,7 +279,7 @@ func unmarshalStruct(tok map[string]string, v *reflect.Value) error {
 			for _, a := range strings.Split(alias, ",") {
 				if v, ok := tok[a]; ok {
 					if err := unmarshal([]byte(v), &f); err != nil {
-						return fmt.Errorf("field: %v", err)
+						return fmt.Errorf("field (%d): %v", i, err)
 					}
 
 					break
@@ -332,7 +335,7 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 			txt, err := t.MarshalText()
 
 			if err != nil {
-				return fmt.Errorf("custom: %v", err)
+				return fmt.Errorf("provided: %v", err)
 			}
 
 			b.Write(txt)
@@ -346,7 +349,7 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 			txt, err := t.MarshalText()
 
 			if err != nil {
-				return fmt.Errorf("custom: %v", err)
+				return fmt.Errorf("provided: %v", err)
 			}
 
 			b.Write(txt)
@@ -401,13 +404,13 @@ func marshalMap(v *reflect.Value, b *strings.Builder) error {
 		}
 
 		if err := marshal(&key, b); err != nil {
-			return fmt.Errorf("token: key: %v", err)
+			return fmt.Errorf("token (%d): key: %v", i, err)
 		}
 
 		b.WriteRune(':')
 
 		if err := marshal(&val, b); err != nil {
-			return fmt.Errorf("token: value: %v", err)
+			return fmt.Errorf("token (%d): value: %v", i, err)
 		}
 	}
 
@@ -423,7 +426,7 @@ func marshalSlice(v *reflect.Value, b *strings.Builder) error {
 		e := v.Index(i)
 
 		if err := marshal(&e, b); err != nil {
-			return fmt.Errorf("token: %v", err)
+			return fmt.Errorf("token (%d): %v", i, err)
 		}
 	}
 
@@ -439,11 +442,11 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 		switch f.Type().Kind() {
 		case reflect.Map:
 			if err := marshalMap(&f, b); err != nil {
-				return fmt.Errorf("embedded map: %v", err)
+				return fmt.Errorf("embedded map (%d): %v", i, err)
 			}
 		case reflect.Struct:
 			if err := marshalStruct(&f, b); err != nil {
-				return fmt.Errorf("embedded struct: %v", err)
+				return fmt.Errorf("embedded struct (%d): %v", i, err)
 			}
 		default:
 			a, ok := t.Field(i).Tag.Lookup("vcas")
@@ -462,7 +465,7 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 			b.WriteRune(':')
 
 			if err := marshal(&f, b); err != nil {
-				return fmt.Errorf("field: %v", err)
+				return fmt.Errorf("field (%d): %v", i, err)
 			}
 		}
 	}

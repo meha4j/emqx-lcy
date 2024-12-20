@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type Packet struct {
+type packet struct {
 	Topic  string      `vcas:"name,n" json:"-"`
 	Stamp  vcas.Time   `vcas:"time,t" json:"timestamp"`
 	Method vcas.Method `vcas:"method,meth,m" json:"-"`
@@ -27,17 +27,17 @@ type observer = string
 
 type Client struct {
 	Conn string
-	Log  *zap.Logger
+	Log  *zap.SugaredLogger
 
 	obs observer
+	pkt packet
 	buf []byte
-	pkt Packet
 	mut sync.Mutex
 
 	adapter proto.ConnectionAdapterClient
 }
 
-func NewClient(conn string, adapter proto.ConnectionAdapterClient, log *zap.Logger) *Client {
+func NewClient(conn string, adapter proto.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
 	return &Client{
 		Conn: conn,
 		Log:  log,
@@ -63,7 +63,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 		}
 
 		if err := c.handlePacket(ctx, &c.pkt); err != nil {
-			return fmt.Errorf("handle: %v", err)
+			return fmt.Errorf("handle packet: %v", err)
 		}
 
 		if cap(c.buf) > 0xff {
@@ -76,7 +76,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-func (c *Client) handlePacket(ctx context.Context, pkt *Packet) error {
+func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 	if c.obs != "" {
 		return nil
 	}
@@ -87,19 +87,29 @@ func (c *Client) handlePacket(ctx context.Context, pkt *Packet) error {
 
 	switch c.pkt.Method {
 	case vcas.PUB:
-		return c.publish(ctx, &c.pkt)
+		if err := c.publish(ctx, &c.pkt); err != nil {
+			return fmt.Errorf("publish: %v", err)
+		}
 	case vcas.SUB:
-		return c.subscribe(ctx, c.pkt.Topic)
+		if err := c.subscribe(ctx, c.pkt.Topic); err != nil {
+			return fmt.Errorf("subscribe: %v", err)
+		}
 	case vcas.USB:
-		return c.unsubscribe(ctx, c.pkt.Topic)
+		if err := c.unsubscribe(ctx, c.pkt.Topic); err != nil {
+			return fmt.Errorf("unsubscribe: %v", err)
+		}
 	case vcas.GET:
-		return c.get(ctx, c.pkt.Topic)
+		if err := c.get(ctx, c.pkt.Topic); err != nil {
+			return fmt.Errorf("get: %v", err)
+		}
 	default:
 		return fmt.Errorf("unknown method")
 	}
+
+	return nil
 }
 
-func (c *Client) publish(ctx context.Context, pkt *Packet) error {
+func (c *Client) publish(ctx context.Context, pkt *packet) error {
 	if pkt.Stamp.Time.IsZero() {
 		pkt.Stamp.Time = time.Now()
 	}
@@ -170,35 +180,27 @@ func (c *Client) get(ctx context.Context, top string) error {
 		return fmt.Errorf("subscribe: %v", err)
 	}
 
-	res, err := c.adapter.StartTimer(ctx, &proto.TimerRequest{
-		Conn:     c.Conn,
-		Type:     proto.TimerType_KEEPALIVE,
-		Interval: 5,
+	c.obs = top
+
+	c.Log.Debug("callback registered for %s", top)
+
+	time.AfterFunc(5*time.Second, func() {
+		c.mut.Lock()
+		defer c.mut.Unlock()
+
+		c.Log.Debugf("callback activated for %s", top)
+
+		if c.obs != "" {
+			c.Log.Debugf("no message found, sending placeholder for %s", top)
+
+			p := &packet{Topic: c.obs}
+
+			c.unsubscribe(context.Background(), c.obs)
+			c.send(context.Background(), p)
+
+			c.obs = ""
+		}
 	})
-
-	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
-	}
-
-	if res.GetCode() != proto.ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
-	}
-
-	return nil
-}
-
-func (c *Client) OnTimerTimeout(ctx context.Context, ttp proto.TimerType) error {
-	c.mut.Lock()
-	defer c.mut.Unlock()
-
-	if c.obs != "" {
-		p := &Packet{Topic: c.obs}
-
-		c.unsubscribe(ctx, c.obs)
-		c.send(ctx, p)
-
-		c.obs = ""
-	}
 
 	return nil
 }
@@ -209,9 +211,11 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) erro
 
 	if c.obs != "" {
 		if c.obs != msg.GetTopic() {
+			c.Log.Debugf("message ignored for %s, waiting for %s", msg.GetTopic(), c.obs)
 			return nil
 		}
 
+		c.Log.Debugf("message found for %s", c.obs)
 		c.obs = ""
 
 		if err := c.unsubscribe(ctx, msg.GetTopic()); err != nil {
@@ -219,7 +223,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) erro
 		}
 	}
 
-	pkt := &Packet{Topic: msg.GetTopic()}
+	pkt := &packet{Topic: msg.GetTopic()}
 	err := json.Unmarshal(msg.GetPayload(), pkt)
 
 	if err != nil {
@@ -233,7 +237,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) erro
 	return nil
 }
 
-func (c *Client) send(ctx context.Context, pkt *Packet) error {
+func (c *Client) send(ctx context.Context, pkt *packet) error {
 	if pkt.Value == nil {
 		pkt.Value = "none"
 	}
