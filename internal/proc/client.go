@@ -18,9 +18,9 @@ type packet struct {
 	Method vcas.Method `vcas:"method,meth,m" json:"-"`
 	Value  any         `vcas:"val,value,v" json:"value,omitempty"`
 
-	Units       string `vcas:"units" json:"-"`
-	Description string `vcas:"descr" json:"-"`
-	Type        string `vcas:"type" json:"-"`
+	Units string `vcas:"units" json:"-"`
+	Descr string `vcas:"descr" json:"-"`
+	Type  string `vcas:"type" json:"-"`
 }
 
 type observer = string
@@ -243,7 +243,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 	}
 
 	pkt.Method = vcas.PUB
-	pkt.Description = "-"
+	pkt.Descr = "-"
 	pkt.Units = "-"
 	pkt.Type = "rw"
 

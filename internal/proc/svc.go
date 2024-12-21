@@ -44,8 +44,11 @@ type service struct {
 
 func NewService(log *zap.SugaredLogger) (proto.ConnectionUnaryHandlerServer, error) {
 	port := viper.GetInt("extd.port")
-	user := viper.GetString("extd.secret.user")
-	pass := viper.GetString("extd.secret.pass")
+
+	user := viper.GetString("extd.emqx.user")
+	pass := viper.GetString("extd.emqx.pass")
+
+	log.Infof("user: %s, pass: %s", user, pass)
 
 	ehost := viper.GetString("extd.emqx.host")
 	eport := viper.GetInt("extd.emqx.port")
@@ -71,7 +74,7 @@ func NewService(log *zap.SugaredLogger) (proto.ConnectionUnaryHandlerServer, err
 				return nil, fmt.Errorf("update configuration: %v", err)
 			}
 
-			log.Errorf("update configuration (%d): %v, retry in %d", i+1, err, timeout.String())
+			log.Errorf("update configuration (%d): %v, retry in %s", i+1, err, timeout.String())
 			time.Sleep(timeout)
 			continue
 		}
@@ -126,31 +129,7 @@ func (s *service) OnSocketCreated(ctx context.Context, req *proto.SocketCreatedR
 	}
 
 	s.store.PutClient(req.GetConn(), NewClient(req.GetConn(), s.adapter, log))
-
 	log.Info("authenticated")
-	log.Debug("starting keepalive timer")
-
-	res, err = s.adapter.StartTimer(ctx, &proto.TimerRequest{
-		Conn:     req.GetConn(),
-		Type:     proto.TimerType_KEEPALIVE,
-		Interval: 300,
-	})
-
-	if err != nil {
-		log.Errorf("timer: adapter:", err)
-		s.adapter.Close(ctx, &proto.CloseSocketRequest{Conn: req.Conn})
-
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	if res.GetCode() != proto.ResultCode_SUCCESS {
-		log.Errorf("timer: %v", res.GetMessage())
-		s.adapter.Close(ctx, &proto.CloseSocketRequest{Conn: req.Conn})
-
-		return nil, status.Error(codes.Unknown, res.GetMessage())
-	}
-
-	log.Debug("keepalive timer started")
 
 	return nil, nil
 }

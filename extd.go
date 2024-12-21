@@ -36,7 +36,7 @@ func main() {
 	if lvl, err := zap.ParseAtomicLevel(viper.GetString("extd.log")); err != nil {
 		cfg.Level.SetLevel(zap.InfoLevel)
 	} else {
-		cfg.Level = lvl
+		cfg.Level.SetLevel(lvl.Level())
 	}
 
 	log, err := cfg.Build()

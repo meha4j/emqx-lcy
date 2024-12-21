@@ -1,0 +1,41 @@
+volumes:
+  emqx-data:
+    name: emqx-data
+    external: true
+
+networks:
+  nano:
+    driver: bridge
+
+services:
+  emqx:
+    image: ghcr.io/blabtm/emqx:latest
+    ports:
+      - 1883:1883
+      - 18083:18083
+      - 20041:20041
+    environment:
+      EMQX_API_KEY__BOOTSTRAP_FILE: /opt/emqx/data/secret.conf
+    networks:
+      - nano
+    volumes:
+      - emqx-data:/opt/emqx/data
+  extd:
+    build:
+      dockerfile: ./build/package/Dockerfile
+    networks:
+      - nano
+    develop:
+      watch:
+        - action: rebuild
+          path: ./internal
+        - action: rebuild
+          path: ./pkg
+        - action: rebuild
+          path: ./extd.go
+        - action: sync+restart
+          path: ./configs/config.yaml
+          target: /etc/config.yaml
+        - action: sync+restart
+          path: ./configs/secret.yaml
+          target: /etc/secret.yaml
