@@ -3,6 +3,7 @@ extd:
   emqx:
     host: emqx
     port: 18083
+    retry: 5
     timeout: 15s
   proc:
     emqx:
@@ -11,7 +12,6 @@ extd:
       listener:
         port: 20041
   auth:
-    postgres:
-      host: postgres
+    pgsql:
+      host: pgsql
       port: 5432
-      name: extd

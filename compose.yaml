@@ -23,19 +23,23 @@ services:
   extd:
     build:
       dockerfile: ./build/package/Dockerfile
+    environment:
+      TZ: Asia/Novosibirsk
     networks:
       - nano
     develop:
       watch:
         - action: rebuild
+          path: ./cmd
+        - action: rebuild
           path: ./internal
         - action: rebuild
           path: ./pkg
         - action: rebuild
-          path: ./extd.go
+          path: ./srv
         - action: sync+restart
-          path: ./configs/config.yaml
-          target: /etc/config.yaml
+          path: ./config/extd-config.yaml
+          target: /etc/extd-config.yaml
         - action: sync+restart
-          path: ./configs/secret.yaml
-          target: /etc/secret.yaml
+          path: ./config/extd-secret.yaml
+          target: /etc/extd-secret.yaml

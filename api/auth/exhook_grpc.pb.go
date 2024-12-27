@@ -18,12 +18,12 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.28.3
-// source: internal/api/exhook.proto
+// source: api/auth/exhook.proto
 
 // The exhook proto version should be fixed as `v2` in EMQX v5.x
 // to make sure the exhook proto version is compatible
 
-package proto
+package auth
 
 import (
 	context "context"
@@ -896,5 +896,5 @@ var HookProvider_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/api/exhook.proto",
+	Metadata: "api/auth/exhook.proto",
 }

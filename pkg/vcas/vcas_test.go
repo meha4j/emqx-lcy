@@ -16,6 +16,7 @@ type person struct {
 type student struct {
 	person
 
+	Stamp  Time      `vcas:"time,t"`
 	Grades []float64 `vcas:"grades"`
 }
 
@@ -261,9 +262,10 @@ func TestUnmarshalBool(t *testing.T) {
 func TestUnmarshalStruct(t *testing.T) {
 	var s student
 
-	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18|grades:4.8,4.9,5.0"), &s))
+	assert.Nil(t, Unmarshal([]byte("name:Dasha|age:18|grades:4.8,4.9,5.0|time:11.06.2005 23_59_59.999"), &s))
 	assert.Equal(t, "Dasha", s.Name)
 	assert.Equal(t, 18, s.Age)
+	assert.Equal(t, int64(1118509199999), s.Stamp.UnixMilli())
 	assert.Equal(t, []float64{4.8, 4.9, 5.0}, s.Grades)
 }
 
@@ -393,13 +395,14 @@ func TestMarshalStruct(t *testing.T) {
 			Age:    18,
 			Method: PUB,
 		},
+		Stamp:  Time{time.UnixMilli(1118509199999)},
 		Grades: []float64{4.8, 4.9, 5.0},
 	}
 
 	m, err := Marshal(&s)
 
 	assert.Nil(t, err)
-	assert.Equal(t, "name:Dasha|age:18|grades:4.8,4.9,5", string(m))
+	assert.Equal(t, "name:Dasha|age:18|method:set|time:11.06.2005 23_59_59.999|grades:4.8,4.9,5", string(m))
 }
 
 func TestMarshalMap(t *testing.T) {

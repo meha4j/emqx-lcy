@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paraskun/extd/internal/proc/proto"
+	"github.com/paraskun/extd/api/proc"
 	"github.com/paraskun/extd/pkg/vcas"
 	"go.uber.org/zap"
 )
@@ -34,10 +34,10 @@ type Client struct {
 	buf []byte
 	mut sync.Mutex
 
-	adapter proto.ConnectionAdapterClient
+	adapter proc.ConnectionAdapterClient
 }
 
-func NewClient(conn string, adapter proto.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
+func NewClient(conn string, adapter proc.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
 	return &Client{
 		Conn: conn,
 		Log:  log,
@@ -120,7 +120,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("marshal: %v", err)
 	}
 
-	res, err := c.adapter.Publish(ctx, &proto.PublishRequest{
+	res, err := c.adapter.Publish(ctx, &proc.PublishRequest{
 		Conn:    c.Conn,
 		Topic:   pkt.Topic,
 		Qos:     0,
@@ -131,7 +131,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proto.ResultCode_SUCCESS {
+	if res.GetCode() != proc.ResultCode_SUCCESS {
 		return fmt.Errorf(res.GetMessage())
 	}
 
@@ -139,7 +139,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 }
 
 func (c *Client) subscribe(ctx context.Context, top string) error {
-	res, err := c.adapter.Subscribe(ctx, &proto.SubscribeRequest{
+	res, err := c.adapter.Subscribe(ctx, &proc.SubscribeRequest{
 		Conn:  c.Conn,
 		Topic: top,
 		Qos:   2,
@@ -149,7 +149,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proto.ResultCode_SUCCESS {
+	if res.GetCode() != proc.ResultCode_SUCCESS {
 		return fmt.Errorf(res.GetMessage())
 	}
 
@@ -157,7 +157,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 }
 
 func (c *Client) unsubscribe(ctx context.Context, top string) error {
-	res, err := c.adapter.Unsubscribe(ctx, &proto.UnsubscribeRequest{
+	res, err := c.adapter.Unsubscribe(ctx, &proc.UnsubscribeRequest{
 		Conn:  c.Conn,
 		Topic: top,
 	})
@@ -166,7 +166,7 @@ func (c *Client) unsubscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proto.ResultCode_SUCCESS {
+	if res.GetCode() != proc.ResultCode_SUCCESS {
 		return fmt.Errorf(res.GetMessage())
 	}
 
@@ -205,7 +205,7 @@ func (c *Client) get(ctx context.Context, top string) error {
 	return nil
 }
 
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *proto.Message) error {
+func (c *Client) OnReceivedMessage(ctx context.Context, msg *proc.Message) error {
 	c.mut.Lock()
 	defer c.mut.Unlock()
 
@@ -243,8 +243,8 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 	}
 
 	pkt.Method = vcas.PUB
-	pkt.Descr = "-"
-	pkt.Units = "-"
+	pkt.Descr = "none"
+	pkt.Units = "none"
 	pkt.Type = "rw"
 
 	txt, err := vcas.Marshal(pkt)
@@ -253,7 +253,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("marshal: %v", err)
 	}
 
-	res, err := c.adapter.Send(ctx, &proto.SendBytesRequest{
+	res, err := c.adapter.Send(ctx, &proc.SendBytesRequest{
 		Conn:  c.Conn,
 		Bytes: append(txt, 10),
 	})
@@ -262,7 +262,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proto.ResultCode_SUCCESS {
+	if res.GetCode() != proc.ResultCode_SUCCESS {
 		return fmt.Errorf(res.GetMessage())
 	}
 

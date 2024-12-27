@@ -18,9 +18,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.28.3
-// source: internal/api/exproto.proto
+// source: api/proc/exproto.proto
 
-package proto
+package proc
 
 import (
 	context "context"
@@ -405,7 +405,7 @@ var ConnectionAdapter_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/api/exproto.proto",
+	Metadata: "api/proc/exproto.proto",
 }
 
 const (
@@ -630,7 +630,7 @@ var ConnectionHandler_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "internal/api/exproto.proto",
+	Metadata: "api/proc/exproto.proto",
 }
 
 const (
@@ -905,5 +905,5 @@ var ConnectionUnaryHandler_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/api/exproto.proto",
+	Metadata: "api/proc/exproto.proto",
 }

@@ -66,7 +66,7 @@ type Time struct {
 }
 
 func (t Time) MarshalText() ([]byte, error) {
-	return []byte(t.Format(Stamp)), nil
+	return []byte(t.In(time.Local).Format(Stamp)), nil
 }
 
 func (t *Time) UnmarshalText(b []byte) error {
@@ -104,7 +104,7 @@ func Unmarshal(b []byte, a any) error {
 }
 
 func unmarshal(b []byte, v *reflect.Value) error {
-	if v.Kind() == reflect.Pointer {
+	if (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) && !v.IsNil() {
 		e := v.Elem()
 
 		return unmarshal(b, &e)
@@ -256,34 +256,28 @@ func unmarshalSlice(tok []string, v *reflect.Value) error {
 	return nil
 }
 
-func unmarshalStruct(tok map[string]string, v *reflect.Value) error {
-	t := v.Type()
+func unmarshalStruct(tok map[string]string, val *reflect.Value) error {
+	t := val.Type()
 
+fields:
 	for i := range t.NumField() {
-		f := v.Field(i)
+		f := val.Field(i)
 
-		switch f.Type().Kind() {
-		case reflect.Map:
-			return fmt.Errorf("unsupported field type (%d)", i)
-		case reflect.Struct:
-			if err := unmarshalStruct(tok, &f); err != nil {
-				return fmt.Errorf("embedded struct (%d): %v", i, err)
-			}
-		default:
-			alias, ok := t.Field(i).Tag.Lookup("vcas")
-
-			if !ok {
-				continue
-			}
-
-			for _, a := range strings.Split(alias, ",") {
+		if a, ok := t.Field(i).Tag.Lookup("vcas"); ok {
+			for _, a := range strings.Split(a, ",") {
 				if v, ok := tok[a]; ok {
 					if err := unmarshal([]byte(v), &f); err != nil {
 						return fmt.Errorf("field (%d): %v", i, err)
 					}
 
-					break
+					continue fields
 				}
+			}
+		}
+
+		if f.Type().Kind() == reflect.Struct {
+			if err := unmarshalStruct(tok, &f); err != nil {
+				return fmt.Errorf("field (%d): %v", i, err)
 			}
 		}
 	}
@@ -324,7 +318,7 @@ func Marshal(a any) ([]byte, error) {
 }
 
 func marshal(v *reflect.Value, b *strings.Builder) error {
-	if v.Kind() == reflect.Pointer {
+	if (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) && !v.IsNil() {
 		e := v.Elem()
 
 		return marshal(&e, b)
@@ -439,22 +433,7 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 	for i := range t.NumField() {
 		f := v.Field(i)
 
-		switch f.Type().Kind() {
-		case reflect.Map:
-			if err := marshalMap(&f, b); err != nil {
-				return fmt.Errorf("embedded map (%d): %v", i, err)
-			}
-		case reflect.Struct:
-			if err := marshalStruct(&f, b); err != nil {
-				return fmt.Errorf("embedded struct (%d): %v", i, err)
-			}
-		default:
-			a, ok := t.Field(i).Tag.Lookup("vcas")
-
-			if !ok {
-				continue
-			}
-
+		if a, ok := t.Field(i).Tag.Lookup("vcas"); ok {
 			a = strings.Split(a, ",")[0]
 
 			if b.Len() != 0 {
@@ -465,6 +444,19 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 			b.WriteRune(':')
 
 			if err := marshal(&f, b); err != nil {
+				return fmt.Errorf("field (%d): %v", i, err)
+			}
+
+			continue
+		}
+
+		switch f.Type().Kind() {
+		case reflect.Map:
+			if err := marshalMap(&f, b); err != nil {
+				return fmt.Errorf("field (%d): %v", i, err)
+			}
+		case reflect.Struct:
+			if err := marshalStruct(&f, b); err != nil {
 				return fmt.Errorf("field (%d): %v", i, err)
 			}
 		}
