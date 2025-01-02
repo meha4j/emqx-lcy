@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/paraskun/extd/api/proc"
+	"github.com/paraskun/extd/api/auth"
 	"github.com/paraskun/extd/pkg/vcas"
 	"go.uber.org/zap"
 )
 
-type packet struct {
+type Packet struct {
 	Topic  string      `vcas:"name,n" json:"-"`
 	Stamp  vcas.Time   `vcas:"time,t" json:"timestamp"`
 	Method vcas.Method `vcas:"method,meth,m" json:"-"`
@@ -29,19 +30,21 @@ type Client struct {
 
 	obs string
 	buf []byte
-	pkt packet
+	pkt Packet
 	mux sync.Mutex
 
 	adapter proc.ConnectionAdapterClient
 }
 
 func NewClient(con string, adapter proc.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
+  buf := make([]byte, 0, 0xff)
+
 	return &Client{
 		Con: con,
 		Log: log,
 
-		buf: make([]byte, 0, 0xff),
-		pkt: packet{
+		buf: buf,
+		pkt: Packet{
 			Units: "none",
 			Descr: "none",
 			Type:  "none",
@@ -82,7 +85,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
+func (c *Client) handlePacket(ctx context.Context, pkt *Packet) error {
 	if c.obs != "" {
 		return nil
 	}
@@ -115,7 +118,11 @@ func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 	return nil
 }
 
-func (c *Client) publish(ctx context.Context, pkt *packet) error {
+func (c *Client) publish(ctx context.Context, pkt *Packet) error {
+  if !acl.Check(pkt.Topic, c.Con, auth.ClientAuthorizeRequest_PUBLISH) {
+    return nil
+  }
+
 	pay, err := json.Marshal(pkt)
 
 	if err != nil {
@@ -123,7 +130,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 	}
 
 	res, err := c.adapter.Publish(ctx, &proc.PublishRequest{
-		Conn:    c.Conn,
+		Conn:    c.Con,
 		Topic:   pkt.Topic,
 		Qos:     0,
 		Payload: pay,
@@ -142,7 +149,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 
 func (c *Client) subscribe(ctx context.Context, top string) error {
 	res, err := c.adapter.Subscribe(ctx, &proc.SubscribeRequest{
-		Conn:  c.Conn,
+		Conn:  c.Con,
 		Topic: top,
 		Qos:   2,
 	})
@@ -160,7 +167,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 
 func (c *Client) unsubscribe(ctx context.Context, top string) error {
 	res, err := c.adapter.Unsubscribe(ctx, &proc.UnsubscribeRequest{
-		Conn:  c.Conn,
+		Conn:  c.Con,
 		Topic: top,
 	})
 
@@ -233,7 +240,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *proc.Message) error
 	return nil
 }
 
-func (c *Client) send(ctx context.Context, pkt *packet) error {
+func (c *Client) send(ctx context.Context, pkt *Packet) error {
 	if pkt.Value == nil {
 		pkt.Value = "none"
 	}
@@ -246,7 +253,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 	}
 
 	res, err := c.adapter.Send(ctx, &proc.SendBytesRequest{
-		Conn:  c.Conn,
+		Conn:  c.Con,
 		Bytes: append(txt, 10),
 	})
 

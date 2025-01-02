@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/paraskun/extd/api/auth"
@@ -15,8 +16,118 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func NewAuth(srv *grpc.Server, cfg *viper.Viper, log *zap.SugaredLogger) error {
-	if err := updateRemote(cfg); err != nil {
+type Action = auth.ClientAuthorizeRequest_AuthorizeReqType
+
+type Rule interface {
+	Check(top, con string, act Action) bool
+}
+
+type ExclusiveRule struct {
+	own atomic.Pointer[string]
+}
+
+func (r *ExclusiveRule) Check(top, con string, act Action) bool {
+	if r.own.CompareAndSwap(nil, &con) {
+		return true
+	}
+
+	if *r.own.Load() == con {
+		return true
+	}
+
+	return false
+}
+
+type ACL struct {
+	dat map[string][]Rule
+	mux sync.RWMutex
+}
+
+func (a *ACL) Check(top, con string, act Action) bool {
+	a.mux.RLock()
+	defer a.mux.RUnlock()
+
+	l, ok := a.dat[top]
+
+	if !ok {
+		return true
+	}
+
+	for _, r := range l {
+		if ok := r.Check(top, con, act); !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (acc *ACL) Fetch(ctx context.Context, addr string) error {
+	acc.mux.Lock()
+	defer acc.mux.Unlock()
+
+	con, err := pgx.Connect(ctx, addr)
+
+	if err != nil {
+		return fmt.Errorf("connect: %v", err)
+	}
+
+	res, err := con.Query(ctx, "SELECT COUNT(DISTINCT top) FROM rule")
+
+	if err != nil {
+		return fmt.Errorf("query: %v", err)
+	}
+
+	num, err := pgx.CollectExactlyOneRow(res, pgx.RowTo[int])
+
+	if err != nil {
+		return fmt.Errorf("scan: %v", err)
+	}
+
+	acc.dat = make(map[string][]Rule, num)
+	res, err = con.Query(ctx, "SELECT top, mod FROM rule")
+
+	if err != nil {
+		return fmt.Errorf("query: %v", err)
+	}
+
+	var top, mod string
+
+	for res.Next() {
+		if err := res.Scan(&top, &mod); err != nil {
+			return fmt.Errorf("scan: %v", err)
+		}
+
+		a, ok := acc.dat[top]
+
+		if !ok {
+			a = make([]Rule, 0, 1)
+		}
+
+		switch mod {
+		case "ex":
+			a = append(a, &ExclusiveRule{})
+		}
+
+		acc.dat[top] = a
+	}
+
+	return nil
+}
+
+func (acc *ACL) Clear() {
+	acc.mux.Lock()
+	defer acc.mux.Unlock()
+
+	for k := range acc.dat {
+		delete(acc.dat, k)
+	}
+}
+
+var acl ACL
+
+func NewAuth(srv *grpc.Server, cli *emqx.Client, cfg *viper.Viper, log *zap.SugaredLogger) error {
+	if err := updateExHookServer(cli, cfg); err != nil {
 		return fmt.Errorf("remote: %v", err)
 	}
 
@@ -29,18 +140,12 @@ func NewAuth(srv *grpc.Server, cfg *viper.Viper, log *zap.SugaredLogger) error {
 
 	log.Infof("register", zap.String("pgsql", addr))
 
-	auth.RegisterHookProviderServer(srv, &service{Log: log, addr: addr})
+	auth.RegisterHookProviderServer(srv, &Auth{Log: log, Addr: addr})
 
 	return nil
 }
 
-func updateRemote(cfg *viper.Viper) error {
-	cli, err := newClient(cfg)
-
-	if err != nil {
-		return fmt.Errorf("emqx client: %v", err)
-	}
-
+func updateExHookServer(cli *emqx.Client, cfg *viper.Viper) error {
 	r := cfg.GetUint("extd.emqx.retry.num")
 	t, err := time.ParseDuration(cfg.GetString("extd.emqx.retry.timeout"))
 
@@ -51,7 +156,10 @@ func updateRemote(cfg *viper.Viper) error {
 	port := cfg.GetInt("extd.port")
 
 	for i := uint(0); true; i++ {
-		if err = cli.UpdateExHookServer("extd", port); err != nil {
+		if err = cli.UpdateExHookServer(&emqx.ExHookServerUpdateRequest{
+			Name: "extd",
+			Addr: fmt.Sprintf("http://%s:%d", cli.Addr, port),
+		}); err != nil {
 			if i == r {
 				return fmt.Errorf("update: %v", err)
 			}
@@ -67,172 +175,118 @@ func updateRemote(cfg *viper.Viper) error {
 	return nil
 }
 
-func newClient(cfg *viper.Viper) (*emqx.Client, error) {
-	port := cfg.GetInt("extd.emqx.port")
-	host := cfg.GetString("extd.emqx.host")
-	user := cfg.GetString("extd.emqx.user")
-	pass := cfg.GetString("extd.emqx.pass")
-	base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
-
-	return emqx.NewClient(base, user, pass)
-}
-
-type service struct {
-	Log *zap.SugaredLogger
-
-	addr  string
-	store sync.Map
+type Auth struct {
+	Log  *zap.SugaredLogger
+	Addr string
 
 	auth.UnimplementedHookProviderServer
 }
 
-func (s *service) OnProviderLoaded(ctx context.Context, _ *auth.ProviderLoadedRequest) (*auth.LoadedResponse, error) {
-	con, err := pgx.Connect(ctx, s.addr)
-
-	if err != nil {
-		return nil, fmt.Errorf("pgx: con: %v", err)
+func (s *Auth) OnProviderLoaded(ctx context.Context, _ *auth.ProviderLoadedRequest) (*auth.LoadedResponse, error) {
+	if err := acl.Fetch(ctx, s.Addr); err != nil {
+		return nil, fmt.Errorf("fetch: %v", err)
 	}
-
-	defer con.Close(ctx)
-
-	top, err := QueryExclusive(ctx, con)
-
-	if err != nil {
-		return nil, fmt.Errorf("query: %v", err)
-	}
-
-	s.Log.Infof("exclusive: %v", top)
 
 	return &auth.LoadedResponse{
 		Hooks: []*auth.HookSpec{
-			{Name: "client.authorize", Topics: top},
+			{Name: "client.authorize"},
 		},
 	}, nil
 }
 
-func QueryExclusive(ctx context.Context, con *pgx.Conn) ([]string, error) {
-	set, err := con.Query(ctx, "SELECT top FROM rule WHERE mod = 'ex'")
-
-	if err != nil {
-		return nil, fmt.Errorf("exec: %v", err)
-	}
-
-	res, err := pgx.CollectRows(set, pgx.RowTo[string])
-
-	if err != nil {
-		return nil, fmt.Errorf("collect: %v", err)
-	}
-
-	return res, nil
-}
-
-func (s *service) OnProviderUnloaded(context.Context, *auth.ProviderUnloadedRequest) (*auth.EmptySuccess, error) {
-	s.store.Clear()
+func (s *Auth) OnProviderUnloaded(context.Context, *auth.ProviderUnloadedRequest) (*auth.EmptySuccess, error) {
+	acl.Clear()
 
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnClientConnect(context.Context, *auth.ClientConnectRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnClientConnect(context.Context, *auth.ClientConnectRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnClientConnack(context.Context, *auth.ClientConnackRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnClientConnack(context.Context, *auth.ClientConnackRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnClientConnected(context.Context, *auth.ClientConnectedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnClientConnected(context.Context, *auth.ClientConnectedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (s *service) OnClientDisconnected(_ context.Context, req *auth.ClientDisconnectedRequest) (*auth.EmptySuccess, error) {
-	s.store.Range(func(key, val any) bool {
-		s.store.CompareAndDelete(key, req.Clientinfo.Clientid)
-		return true
-	})
-
+func (s *Auth) OnClientDisconnected(_ context.Context, req *auth.ClientDisconnectedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (s *service) OnClientAuthenticate(_ context.Context, req *auth.ClientAuthenticateRequest) (*auth.ValuedResponse, error) {
+func (s *Auth) OnClientAuthenticate(_ context.Context, req *auth.ClientAuthenticateRequest) (*auth.ValuedResponse, error) {
 	return &auth.ValuedResponse{
 		Type:  auth.ValuedResponse_CONTINUE,
 		Value: &auth.ValuedResponse_BoolResult{BoolResult: true},
 	}, nil
 }
 
-func (s *service) OnClientAuthorize(_ context.Context, req *auth.ClientAuthorizeRequest) (*auth.ValuedResponse, error) {
-	s.Log.Infof("priv: %v", req)
-	res := auth.ValuedResponse{
-		Type:  auth.ValuedResponse_STOP_AND_RETURN,
-		Value: &auth.ValuedResponse_BoolResult{BoolResult: true},
+func (s *Auth) OnClientAuthorize(_ context.Context, req *auth.ClientAuthorizeRequest) (*auth.ValuedResponse, error) {
+	if !acl.Check(req.Topic, req.Clientinfo.Clientid, req.Type) {
+		return &auth.ValuedResponse{
+			Type:  auth.ValuedResponse_STOP_AND_RETURN,
+			Value: &auth.ValuedResponse_BoolResult{BoolResult: false},
+		}, nil
 	}
 
-	if req.Type != auth.ClientAuthorizeRequest_PUBLISH {
-		s.Log.Infof("ok: %v", req)
-		return &res, nil
-	}
-
-	v, ok := s.store.LoadOrStore(req.Topic, req.Clientinfo.Clientid)
-
-	if ok && v != req.Clientinfo.Clientid {
-		res.Value = &auth.ValuedResponse_BoolResult{BoolResult: false}
-		return &res, nil
-	}
-
-	return &res, nil
+	return &auth.ValuedResponse{
+		Type: auth.ValuedResponse_CONTINUE,
+	}, nil
 }
 
-func (*service) OnClientSubscribe(context.Context, *auth.ClientSubscribeRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnClientSubscribe(context.Context, *auth.ClientSubscribeRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnClientUnsubscribe(context.Context, *auth.ClientUnsubscribeRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnClientUnsubscribe(context.Context, *auth.ClientUnsubscribeRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionCreated(context.Context, *auth.SessionCreatedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionCreated(context.Context, *auth.SessionCreatedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionSubscribed(context.Context, *auth.SessionSubscribedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionSubscribed(context.Context, *auth.SessionSubscribedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionUnsubscribed(context.Context, *auth.SessionUnsubscribedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionUnsubscribed(context.Context, *auth.SessionUnsubscribedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionResumed(context.Context, *auth.SessionResumedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionResumed(context.Context, *auth.SessionResumedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionDiscarded(context.Context, *auth.SessionDiscardedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionDiscarded(context.Context, *auth.SessionDiscardedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionTakenover(context.Context, *auth.SessionTakenoverRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionTakenover(context.Context, *auth.SessionTakenoverRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionTerminated(context.Context, *auth.SessionTerminatedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnSessionTerminated(context.Context, *auth.SessionTerminatedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (s *service) OnMessagePublish(_ context.Context, req *auth.MessagePublishRequest) (*auth.ValuedResponse, error) {
+func (s *Auth) OnMessagePublish(_ context.Context, req *auth.MessagePublishRequest) (*auth.ValuedResponse, error) {
 	return &auth.ValuedResponse{
 		Type:  auth.ValuedResponse_CONTINUE,
 		Value: &auth.ValuedResponse_BoolResult{BoolResult: true},
 	}, nil
 }
 
-func (*service) OnMessageDelivered(context.Context, *auth.MessageDeliveredRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnMessageDelivered(context.Context, *auth.MessageDeliveredRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (*service) OnMessageDropped(context.Context, *auth.MessageDroppedRequest) (*auth.EmptySuccess, error) {
+func (*Auth) OnMessageDropped(context.Context, *auth.MessageDroppedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }
 
-func (s *service) OnMessageAcked(_ context.Context, req *auth.MessageAckedRequest) (*auth.EmptySuccess, error) {
+func (s *Auth) OnMessageAcked(_ context.Context, req *auth.MessageAckedRequest) (*auth.EmptySuccess, error) {
 	return &auth.EmptySuccess{}, nil
 }

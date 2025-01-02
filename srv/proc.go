@@ -3,6 +3,7 @@ package srv
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/paraskun/extd/api/proc"
@@ -16,43 +17,29 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func NewProc(srv *grpc.Server, cfg *viper.Viper, log *zap.SugaredLogger) error {
-	svc, err := newService(cfg, log)
-
-	if err != nil {
-		return fmt.Errorf("svc: %v", err)
-	}
-
-	proc.RegisterConnectionUnaryHandlerServer(srv, svc)
-
-	return nil
+type Cache struct {
 }
 
-func newService(cfg *viper.Viper, log *zap.SugaredLogger) (proc.ConnectionUnaryHandlerServer, error) {
-	if err := updateRemote(cfg); err != nil {
-		return nil, fmt.Errorf("remote: %v", err)
+func NewProc(srv *grpc.Server, cli *emqx.Client, cfg *viper.Viper, log *zap.SugaredLogger) error {
+	if err := updateExProtoGateway(cli, cfg); err != nil {
+		return fmt.Errorf("remote: %v", err)
 	}
 
 	adapter, err := newAdapter(cfg)
 
 	if err != nil {
-		return nil, fmt.Errorf("adapter: %v", err)
+		return fmt.Errorf("adapter: %v", err)
 	}
 
-	return &service{
+	proc.RegisterConnectionUnaryHandlerServer(srv, &Proc{
 		Log:     log,
-		store:   NewStore(),
 		adapter: adapter,
-	}, nil
+	})
+
+	return nil
 }
 
-func updateRemote(cfg *viper.Viper) error {
-	cli, err := newClient(cfg)
-
-	if err != nil {
-		return fmt.Errorf("emqx client: %v", err)
-	}
-
+func updateExProtoGateway(cli *emqx.Client, cfg *viper.Viper) error {
 	r := cfg.GetInt("extd.emqx.retry")
 	t, err := time.ParseDuration(cfg.GetString("extd.emqx.timeout"))
 
@@ -64,10 +51,23 @@ func updateRemote(cfg *viper.Viper) error {
 	lp := cfg.GetInt("extd.proc.emqx.listener.port")
 	hp := cfg.GetInt("extd.port")
 
-	auth.ExclusiveRule
-
 	for i := 0; true; i++ {
-		if err = cli.UpdateExProtoGateway(ap, lp, hp); err != nil {
+		if err = cli.UpdateExProtoGateway(&emqx.ExProtoGatewayUpdateRequest{
+			Name: "exproto",
+			Server: emqx.Server{
+				Bind: fmt.Sprintf(":%d", ap),
+			},
+			Handler: emqx.Handler{
+				Addr: fmt.Sprintf("http://%s:%d", cli.Addr, hp),
+			},
+			Listeners: []emqx.Listener{
+				{
+					Name: "default",
+					Type: "tcp",
+					Bind: strconv.Itoa(lp),
+				},
+			},
+		}); err != nil {
 			if i == r {
 				return fmt.Errorf("update: %v", err)
 			}
@@ -81,16 +81,6 @@ func updateRemote(cfg *viper.Viper) error {
 	}
 
 	return nil
-}
-
-func newClient(cfg *viper.Viper) (*emqx.Client, error) {
-	port := cfg.GetInt("extd.emqx.port")
-	host := cfg.GetString("extd.emqx.host")
-	user := cfg.GetString("extd.emqx.user")
-	pass := cfg.GetString("extd.emqx.pass")
-	base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
-
-	return emqx.NewClient(base, user, pass)
 }
 
 func newAdapter(cfg *viper.Viper) (proc.ConnectionAdapterClient, error) {
@@ -108,7 +98,7 @@ func newAdapter(cfg *viper.Viper) (proc.ConnectionAdapterClient, error) {
 	return proc.NewConnectionAdapterClient(con), nil
 }
 
-type service struct {
+type Proc struct {
 	Log *zap.SugaredLogger
 
 	store   *Store
@@ -117,7 +107,7 @@ type service struct {
 	proc.UnimplementedConnectionUnaryHandlerServer
 }
 
-func (s *service) OnSocketCreated(ctx context.Context, req *proc.SocketCreatedRequest) (*proc.EmptySuccess, error) {
+func (s *Proc) OnSocketCreated(ctx context.Context, req *proc.SocketCreatedRequest) (*proc.EmptySuccess, error) {
 	log := s.Log.With(
 		zap.String("conn", req.GetConn()),
 		zap.String("host", req.GetConninfo().GetPeername().GetHost()),
@@ -152,7 +142,7 @@ func (s *service) OnSocketCreated(ctx context.Context, req *proc.SocketCreatedRe
 	return nil, nil
 }
 
-func (s *service) OnSocketClosed(_ context.Context, req *proc.SocketClosedRequest) (*proc.EmptySuccess, error) {
+func (s *Proc) OnSocketClosed(_ context.Context, req *proc.SocketClosedRequest) (*proc.EmptySuccess, error) {
 	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
@@ -164,7 +154,7 @@ func (s *service) OnSocketClosed(_ context.Context, req *proc.SocketClosedReques
 	return nil, nil
 }
 
-func (s *service) OnReceivedBytes(ctx context.Context, req *proc.ReceivedBytesRequest) (*proc.EmptySuccess, error) {
+func (s *Proc) OnReceivedBytes(ctx context.Context, req *proc.ReceivedBytesRequest) (*proc.EmptySuccess, error) {
 	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
@@ -182,11 +172,11 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *proc.ReceivedBytesRe
 	return nil, nil
 }
 
-func (s *service) OnTimerTimeout(ctx context.Context, req *proc.TimerTimeoutRequest) (*proc.EmptySuccess, error) {
+func (s *Proc) OnTimerTimeout(ctx context.Context, req *proc.TimerTimeoutRequest) (*proc.EmptySuccess, error) {
 	return nil, nil
 }
 
-func (s *service) OnReceivedMessages(ctx context.Context, req *proc.ReceivedMessagesRequest) (*proc.EmptySuccess, error) {
+func (s *Proc) OnReceivedMessages(ctx context.Context, req *proc.ReceivedMessagesRequest) (*proc.EmptySuccess, error) {
 	c, ok := s.store.GetClientByConn(req.GetConn())
 
 	if !ok {
