@@ -6,35 +6,34 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 )
 
-type server struct {
+type Server struct {
 	Bind string `json:"bind"`
 }
 
-type handler struct {
+type Handler struct {
 	Addr string `json:"address"`
 }
 
-type listener struct {
+type Listener struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Bind string `json:"bind"`
 }
 
-type exProtoGatewayUpdateRequest struct {
+type ExProtoGatewayUpdateRequest struct {
 	Name       string     `json:"name"`
 	Timeout    string     `json:"idle_timeout"`
 	Mountpoint string     `json:"mountpoint"`
 	Enable     bool       `json:"enable"`
 	Statistics bool       `json:"enable_stats"`
-	Server     server     `json:"server"`
-	Handler    handler    `json:"handler"`
-	Listeners  []listener `json:"listeners"`
+	Server     Server     `json:"server"`
+	Handler    Handler    `json:"handler"`
+	Listeners  []Listener `json:"listeners"`
 }
 
-type exHookAddServerRequest struct {
+type ExHookServerUpdateRequest struct {
 	Name      string `json:"name"`
 	Enable    bool   `json:"enable"`
 	Addr      string `json:"url"`
@@ -46,59 +45,45 @@ type exHookAddServerRequest struct {
 
 type Client struct {
 	BaseUrl string
+	Addr    string
 
 	conn *http.Client
-	addr string
-	name string
+	user string
 	pass string
 }
 
-func NewClient(url, name, pass string) (*Client, error) {
-	addr, err := net.LookupIP("extd")
-
-	if err != nil {
-		return nil, fmt.Errorf("dns lookup: %v", err)
-	}
-
-	if len(addr) == 0 {
-		return nil, fmt.Errorf("dns lookup: no record")
-	}
-
+func NewClient(url, user, pass string) (*Client, error) {
 	return &Client{
 		BaseUrl: url,
+		Addr:    "localhost",
 
 		conn: &http.Client{},
-		addr: addr[0].String(),
-		name: name,
+		user: user,
 		pass: pass,
 	}, nil
 }
 
-func (c *Client) UpdateExProtoGateway(aport, lport, hport int) error {
-	pay := exProtoGatewayUpdateRequest{
-		Name:       "exproto",
-		Enable:     false,
-		Statistics: true,
-		Timeout:    "300s",
-		Handler: handler{
-			Addr: fmt.Sprintf("http://%s:%d", c.addr, hport),
-		},
-		Server: server{
-			Bind: strconv.Itoa(aport),
-		},
-		Listeners: []listener{
-			{
-				Name: "default",
-				Type: "tcp",
-				Bind: strconv.Itoa(lport),
-			},
-		},
+func (c *Client) LookupAddress(host string) error {
+	addr, err := net.LookupIP(host)
+
+	if err != nil {
+		return fmt.Errorf("dns: %v", err)
 	}
 
+	if len(addr) == 0 {
+		return fmt.Errorf("no record")
+	}
+
+	c.Addr = addr[0].String()
+
+	return nil
+}
+
+func (c *Client) UpdateExProtoGateway(pay *ExProtoGatewayUpdateRequest) error {
 	bin, err := json.Marshal(pay)
 
 	if err != nil {
-		return fmt.Errorf("marshal request: %v", err)
+		return fmt.Errorf("marshal payload: %v", err)
 	}
 
 	url := c.BaseUrl + "/gateways/exproto"
@@ -108,13 +93,13 @@ func (c *Client) UpdateExProtoGateway(aport, lport, hport int) error {
 		return fmt.Errorf("create request: %v", err)
 	}
 
-	req.SetBasicAuth(c.name, c.pass)
+	req.SetBasicAuth(c.user, c.pass)
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := c.conn.Do(req)
 
 	if err != nil {
-		return fmt.Errorf("request: %v", err)
+		return fmt.Errorf("exec request: %v", err)
 	}
 
 	defer res.Body.Close()
@@ -128,39 +113,46 @@ func (c *Client) UpdateExProtoGateway(aport, lport, hport int) error {
 			return fmt.Errorf("parse response: %v", err)
 		}
 
-		return fmt.Errorf(buf.String())
+		return fmt.Errorf("%v", buf.String())
 	}
 
 	return nil
 }
 
-func (c *Client) AddExHookServer(hport int) error {
-	pay := exHookAddServerRequest{
-		Name:   "extd",
-		Enable: false,
-		Addr:   fmt.Sprintf("http://%s:%d", c.addr, hport),
+func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
+	ok, err := c.CheckExHookServer(pay.Name)
+
+	if err != nil {
+		return fmt.Errorf("check server: %v", err)
 	}
 
 	bin, err := json.Marshal(pay)
 
 	if err != nil {
-		return fmt.Errorf("marshal request: %v", err)
+		return fmt.Errorf("marshal payload: %v", err)
 	}
 
 	url := c.BaseUrl + "/exhooks"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(bin))
+	met := http.MethodPost
+
+	if ok {
+		url += "/" + pay.Name
+		met = http.MethodPut
+	}
+
+	req, err := http.NewRequest(met, url, bytes.NewReader(bin))
 
 	if err != nil {
 		return fmt.Errorf("create request: %v", err)
 	}
 
-	req.SetBasicAuth(c.name, c.pass)
+	req.SetBasicAuth(c.user, c.pass)
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := c.conn.Do(req)
 
 	if err != nil {
-		return fmt.Errorf("request: %v", err)
+		return fmt.Errorf("exec request: %v", err)
 	}
 
 	defer res.Body.Close()
@@ -174,8 +166,33 @@ func (c *Client) AddExHookServer(hport int) error {
 			return fmt.Errorf("parse response: %v", err)
 		}
 
-		return fmt.Errorf(buf.String())
+		return fmt.Errorf("%v", buf.String())
 	}
 
 	return nil
+}
+
+func (c *Client) CheckExHookServer(name string) (bool, error) {
+	url := c.BaseUrl + "/exhooks/" + name
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+
+	if err != nil {
+		return false, fmt.Errorf("create request: %v", err)
+	}
+
+	req.SetBasicAuth(c.user, c.pass)
+
+	res, err := c.conn.Do(req)
+
+	if err != nil {
+		return false, fmt.Errorf("request exec: %v", err)
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode == 200 {
+		return true, nil
+	}
+
+	return false, nil
 }

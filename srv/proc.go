@@ -1,4 +1,4 @@
-package proc
+package srv
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/paraskun/extd/api/proc"
-	"github.com/paraskun/extd/internal/emqx"
+	"github.com/paraskun/extd/pkg/emqx"
 	"github.com/paraskun/extd/pkg/vcas"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -16,11 +16,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func Register(srv *grpc.Server, cfg *viper.Viper, log *zap.Logger) error {
-	svc, err := newService(cfg, log.Sugar())
+func NewProc(srv *grpc.Server, cfg *viper.Viper, log *zap.SugaredLogger) error {
+	svc, err := newService(cfg, log)
 
 	if err != nil {
-		return fmt.Errorf("service: %v", err)
+		return fmt.Errorf("svc: %v", err)
 	}
 
 	proc.RegisterConnectionUnaryHandlerServer(srv, svc)
@@ -63,6 +63,8 @@ func updateRemote(cfg *viper.Viper) error {
 	ap := cfg.GetInt("extd.proc.emqx.adapter.port")
 	lp := cfg.GetInt("extd.proc.emqx.listener.port")
 	hp := cfg.GetInt("extd.port")
+
+	auth.ExclusiveRule
 
 	for i := 0; true; i++ {
 		if err = cli.UpdateExProtoGateway(ap, lp, hp); err != nil {

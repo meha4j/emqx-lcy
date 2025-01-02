@@ -5,13 +5,13 @@ extd:
     port: 18083
     retry: 5
     timeout: 15s
+  pgsql:
+    host: pgsql
+    port: 5432
+    name: postgres
   proc:
     emqx:
       adapter:
         port: 9110
       listener:
         port: 20041
-  auth:
-    pgsql:
-      host: pgsql
-      port: 5432

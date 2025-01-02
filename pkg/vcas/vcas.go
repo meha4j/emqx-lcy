@@ -66,11 +66,11 @@ type Time struct {
 }
 
 func (t Time) MarshalText() ([]byte, error) {
-	return []byte(t.In(time.Local).Format(Stamp)), nil
+	return []byte(t.Format(Stamp)), nil
 }
 
 func (t *Time) UnmarshalText(b []byte) error {
-	tm, err := time.ParseInLocation(Stamp, string(b), time.Local)
+	tm, err := time.Parse(Stamp, string(b))
 
 	if err != nil {
 		return fmt.Errorf("parse formatted: %v", err)

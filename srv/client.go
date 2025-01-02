@@ -1,4 +1,4 @@
-package proc
+package srv
 
 import (
 	context "context"
@@ -23,34 +23,37 @@ type packet struct {
 	Type  string `vcas:"type" json:"-"`
 }
 
-type observer = string
-
 type Client struct {
-	Conn string
-	Log  *zap.SugaredLogger
+	Con string
+	Log *zap.SugaredLogger
 
-	obs observer
-	pkt packet
+	obs string
 	buf []byte
-	mut sync.Mutex
+	pkt packet
+	mux sync.Mutex
 
 	adapter proc.ConnectionAdapterClient
 }
 
-func NewClient(conn string, adapter proc.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
+func NewClient(con string, adapter proc.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
 	return &Client{
-		Conn: conn,
-		Log:  log,
+		Con: con,
+		Log: log,
 
 		buf: make([]byte, 0, 0xff),
+		pkt: packet{
+			Units: "none",
+			Descr: "none",
+			Type:  "none",
+		},
 
 		adapter: adapter,
 	}
 }
 
 func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
-	c.mut.Lock()
-	defer c.mut.Unlock()
+	c.mux.Lock()
+	defer c.mux.Unlock()
 
 	for _, b := range msg {
 		if b != 10 {
@@ -58,12 +61,15 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 			continue
 		}
 
+		c.pkt.Stamp.Time = time.Now()
+		c.pkt.Value = nil
+
 		if err := vcas.Unmarshal(c.buf, &c.pkt); err != nil {
 			return fmt.Errorf("unmarshal: %v", err)
 		}
 
 		if err := c.handlePacket(ctx, &c.pkt); err != nil {
-			return fmt.Errorf("handle packet: %v", err)
+			return fmt.Errorf("handle: %v", err)
 		}
 
 		if cap(c.buf) > 0xff {
@@ -110,10 +116,6 @@ func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 }
 
 func (c *Client) publish(ctx context.Context, pkt *packet) error {
-	if pkt.Stamp.Time.IsZero() {
-		pkt.Stamp.Time = time.Now()
-	}
-
 	pay, err := json.Marshal(pkt)
 
 	if err != nil {
@@ -132,7 +134,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 	}
 
 	if res.GetCode() != proc.ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
+		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
 	return nil
@@ -150,7 +152,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 	}
 
 	if res.GetCode() != proc.ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
+		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
 	return nil
@@ -167,7 +169,7 @@ func (c *Client) unsubscribe(ctx context.Context, top string) error {
 	}
 
 	if res.GetCode() != proc.ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
+		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
 	return nil
@@ -182,21 +184,17 @@ func (c *Client) get(ctx context.Context, top string) error {
 
 	c.obs = top
 
-	c.Log.Debug("callback registered for %s", top)
-
 	time.AfterFunc(5*time.Second, func() {
-		c.mut.Lock()
-		defer c.mut.Unlock()
-
-		c.Log.Debugf("callback activated for %s", top)
+		c.mux.Lock()
+		defer c.mux.Unlock()
 
 		if c.obs != "" {
-			c.Log.Debugf("no message found, sending placeholder for %s", top)
-
-			p := &packet{Topic: c.obs}
+			c.pkt.Topic = c.obs
+			c.pkt.Stamp.Time = time.Now()
+			c.pkt.Value = nil
 
 			c.unsubscribe(context.Background(), c.obs)
-			c.send(context.Background(), p)
+			c.send(context.Background(), &c.pkt)
 
 			c.obs = ""
 		}
@@ -206,16 +204,14 @@ func (c *Client) get(ctx context.Context, top string) error {
 }
 
 func (c *Client) OnReceivedMessage(ctx context.Context, msg *proc.Message) error {
-	c.mut.Lock()
-	defer c.mut.Unlock()
+	c.mux.Lock()
+	defer c.mux.Unlock()
 
 	if c.obs != "" {
 		if c.obs != msg.GetTopic() {
-			c.Log.Debugf("message ignored for %s, waiting for %s", msg.GetTopic(), c.obs)
 			return nil
 		}
 
-		c.Log.Debugf("message found for %s", c.obs)
 		c.obs = ""
 
 		if err := c.unsubscribe(ctx, msg.GetTopic()); err != nil {
@@ -223,14 +219,14 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *proc.Message) error
 		}
 	}
 
-	pkt := &packet{Topic: msg.GetTopic()}
-	err := json.Unmarshal(msg.GetPayload(), pkt)
+	c.pkt.Topic = msg.GetTopic()
+	c.pkt.Value = nil
 
-	if err != nil {
+	if err := json.Unmarshal(msg.GetPayload(), &c.pkt); err != nil {
 		return fmt.Errorf("parse: %v", err)
 	}
 
-	if err := c.send(ctx, pkt); err != nil {
+	if err := c.send(ctx, &c.pkt); err != nil {
 		return fmt.Errorf("send: %v", err)
 	}
 
@@ -243,10 +239,6 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 	}
 
 	pkt.Method = vcas.PUB
-	pkt.Descr = "none"
-	pkt.Units = "none"
-	pkt.Type = "rw"
-
 	txt, err := vcas.Marshal(pkt)
 
 	if err != nil {
@@ -263,7 +255,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 	}
 
 	if res.GetCode() != proc.ResultCode_SUCCESS {
-		return fmt.Errorf(res.GetMessage())
+		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
 	return nil

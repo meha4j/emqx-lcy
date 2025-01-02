@@ -1,16 +1,16 @@
-package proc
+package srv
 
 import "sync"
 
-type Store struct {
-	dat map[string]*Client
-	mux sync.RWMutex
+type ExclusiveRule struct {
+
 }
 
-func NewStore() *Store {
-	return &Store{
-		dat: make(map[string]*Client, 5000),
-	}
+type Store struct {
+	
+
+	dat map[string]*Client
+	mux sync.RWMutex
 }
 
 func (s *Store) PutClient(conn string, client *Client) {
@@ -20,18 +20,18 @@ func (s *Store) PutClient(conn string, client *Client) {
 	s.dat[conn] = client
 }
 
-func (s *Store) RemoveClient(conn string) {
+func (s *Store) RemClient(conn string) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
 	s.dat[conn] = nil
 }
 
-func (s *Store) GetClientByConn(conn string) (*Client, bool) {
+func (s *Store) GetClient(con string) (*Client, bool) {
 	s.mux.RLock()
 	defer s.mux.RUnlock()
 
-	c, ok := s.dat[conn]
+	c, ok := s.dat[con]
 
 	return c, ok
 }

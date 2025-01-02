@@ -3,9 +3,8 @@ package srv
 import (
 	"fmt"
 	"net"
+	"time"
 
-	"github.com/paraskun/extd/srv/auth"
-	"github.com/paraskun/extd/srv/proc"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -33,25 +32,26 @@ func WithSecret(s string) Option {
 }
 
 func StartServer(opts ...Option) error {
-	cfg, err := getConfig(opts)
+	cfg, err := newConfig(opts)
 
 	if err != nil {
 		return fmt.Errorf("config: %v", err)
 	}
 
-	log, err := getLogger(cfg)
+	log, err := newLogger(cfg)
 
 	if err != nil {
 		return fmt.Errorf("logger: %v", err)
 	}
 
+	log.Info("starting", zap.String("timezone", time.Local.String()))
 	srv := grpc.NewServer()
 
-	if err := proc.Register(srv, cfg, log.With(zap.String("svc", "proc"))); err != nil {
+	if err := NewProc(srv, cfg, log.Sugar().With(zap.String("svc", "proc"))); err != nil {
 		return fmt.Errorf("proc: %v", err)
 	}
 
-	if err := auth.Register(srv, cfg, log.With(zap.String("svc", "auth"))); err != nil {
+	if err := NewAuth(srv, cfg, log.Sugar().With(zap.String("svc", "auth"))); err != nil {
 		return fmt.Errorf("auth: %v", err)
 	}
 
@@ -59,13 +59,27 @@ func StartServer(opts ...Option) error {
 	net, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 
 	if err != nil {
-		return fmt.Errorf("network: %v", err)
+		return fmt.Errorf("net: %v", err)
 	}
 
 	return srv.Serve(net)
 }
 
-func getConfig(opts []Option) (*viper.Viper, error) {
+func newConfig(opts []Option) (*viper.Viper, error) {
+	cfg := viper.New()
+
+	cfg.SetDefault("extd.port", 9111)
+	cfg.SetDefault("extd.log.level", "debug")
+	cfg.SetDefault("extd.emqx.host", "emqx")
+	cfg.SetDefault("extd.emqx.port", 18083)
+	cfg.SetDefault("extd.emqx.retry.num", 5)
+	cfg.SetDefault("extd.emqx.retry.timeout", "5s")
+	cfg.SetDefault("extd.pgsql.host", "pgsql")
+	cfg.SetDefault("extd.pgsql.port", 5432)
+	cfg.SetDefault("extd.proc.emqx.adater.port", 9110)
+	cfg.SetDefault("extd.proc.emqx.listener.port", 20041)
+	cfg.SetDefault("extd.auth.pgsql.name", "postgres")
+
 	var options options
 
 	for _, opt := range opts {
@@ -73,19 +87,6 @@ func getConfig(opts []Option) (*viper.Viper, error) {
 			return nil, fmt.Errorf("options: %v", err)
 		}
 	}
-
-	cfg := viper.New()
-
-	cfg.SetDefault("extd.port", 9111)
-	cfg.SetDefault("extd.log", "debug")
-	cfg.SetDefault("extd.emqx.host", "emqx")
-	cfg.SetDefault("extd.emqx.port", 18083)
-	cfg.SetDefault("extd.emqx.retry", 5)
-	cfg.SetDefault("extd.emqx.timeout", "15s")
-	cfg.SetDefault("extd.proc.emqx.adater.port", 9110)
-	cfg.SetDefault("extd.proc.emqx.listener.port", 20041)
-	cfg.SetDefault("extd.auth.pgsql.host", "pgsql")
-	cfg.SetDefault("extd.auth.pgsql.port", 5432)
 
 	if options.config != nil {
 		cfg.SetConfigFile(*options.config)
@@ -106,13 +107,13 @@ func getConfig(opts []Option) (*viper.Viper, error) {
 	return cfg, nil
 }
 
-func getLogger(cfg *viper.Viper) (*zap.Logger, error) {
+func newLogger(cfg *viper.Viper) (*zap.Logger, error) {
 	conf := zap.NewProductionConfig()
 
 	conf.Development = true
 	conf.Encoding = "console"
 
-	if lvl, err := zap.ParseAtomicLevel(cfg.GetString("extd.log")); err != nil {
+	if lvl, err := zap.ParseAtomicLevel(cfg.GetString("extd.log.level")); err != nil {
 		conf.Level.SetLevel(zap.InfoLevel)
 	} else {
 		conf.Level.SetLevel(lvl.Level())
