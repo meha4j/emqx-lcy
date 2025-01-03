@@ -2,11 +2,14 @@ package srv
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"time"
 
+	"github.com/paraskun/extd/pkg/emqx"
+	"github.com/paraskun/extd/srv/auth"
+	"github.com/paraskun/extd/srv/proc"
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
@@ -32,53 +35,76 @@ func WithSecret(s string) Option {
 }
 
 func StartServer(opts ...Option) error {
-	cfg, err := newConfig(opts)
+	cfg, err := configure(opts)
 
 	if err != nil {
 		return fmt.Errorf("config: %v", err)
 	}
 
-	log, err := newLogger(cfg)
+	log.Println("starting server. configuration:")
+	cfg.DebugTo(log.Writer())
+
+	host := cfg.GetString("extd.emqx.host")
+	port := cfg.GetInt("extd.emqx.port")
+	base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
+
+	ctl, err := auth.NewStore()
 
 	if err != nil {
-		return fmt.Errorf("logger: %v", err)
+		return fmt.Errorf("acl: %v", err)
 	}
 
-	log.Info("starting", zap.String("timezone", time.Local.String()))
+	cli, err := emqx.NewClient(base,
+		emqx.WithUser(cfg.GetString("extd.emqx.user")),
+		emqx.WithPass(cfg.GetString("extd.emqx.pass")),
+		emqx.WithRetries(cfg.GetInt("extd.emqx.rmax")),
+		emqx.WithTimeout(cfg.GetString("extd.emqx.tout")),
+	)
+
+	if err != nil {
+		return fmt.Errorf("emqx: %v", err)
+	}
+
+	if err := cli.LookupAddress("extd"); err != nil {
+		return fmt.Errorf("lookup: %v", err)
+	}
+
 	srv := grpc.NewServer()
 
-	if err := NewProc(srv, cfg, log.Sugar().With(zap.String("svc", "proc"))); err != nil {
+	if err := proc.Register(srv, ctl, cli, cfg); err != nil {
 		return fmt.Errorf("proc: %v", err)
 	}
 
-	if err := NewAuth(srv, cfg, log.Sugar().With(zap.String("svc", "auth"))); err != nil {
+	if err := auth.Register(srv, ctl, cli, cfg); err != nil {
 		return fmt.Errorf("auth: %v", err)
 	}
 
-	port := cfg.GetInt("extd.port")
+	port = cfg.GetInt("extd.port")
 	net, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 
 	if err != nil {
 		return fmt.Errorf("net: %v", err)
 	}
 
+	log.Printf("listening on :%d\n", port)
+
 	return srv.Serve(net)
 }
 
-func newConfig(opts []Option) (*viper.Viper, error) {
+func configure(opts []Option) (*viper.Viper, error) {
 	cfg := viper.New()
 
+	cfg.SetDefault("extd.tz", time.Local.String())
 	cfg.SetDefault("extd.port", 9111)
-	cfg.SetDefault("extd.log.level", "debug")
 	cfg.SetDefault("extd.emqx.host", "emqx")
 	cfg.SetDefault("extd.emqx.port", 18083)
-	cfg.SetDefault("extd.emqx.retry.num", 5)
+	cfg.SetDefault("extd.emqx.retry.attempt", 5)
 	cfg.SetDefault("extd.emqx.retry.timeout", "5s")
-	cfg.SetDefault("extd.pgsql.host", "pgsql")
-	cfg.SetDefault("extd.pgsql.port", 5432)
-	cfg.SetDefault("extd.proc.emqx.adater.port", 9110)
+	cfg.SetDefault("extd.db.host", "pgsql")
+	cfg.SetDefault("extd.db.port", 5432)
+	cfg.SetDefault("extd.proc.emqx.adapter.port", 9110)
 	cfg.SetDefault("extd.proc.emqx.listener.port", 20041)
-	cfg.SetDefault("extd.auth.pgsql.name", "postgres")
+	cfg.SetDefault("extd.auth.db.name", "postgres")
 
 	var options options
 
@@ -105,19 +131,4 @@ func newConfig(opts []Option) (*viper.Viper, error) {
 	}
 
 	return cfg, nil
-}
-
-func newLogger(cfg *viper.Viper) (*zap.Logger, error) {
-	conf := zap.NewProductionConfig()
-
-	conf.Development = true
-	conf.Encoding = "console"
-
-	if lvl, err := zap.ParseAtomicLevel(cfg.GetString("extd.log.level")); err != nil {
-		conf.Level.SetLevel(zap.InfoLevel)
-	} else {
-		conf.Level.SetLevel(lvl.Level())
-	}
-
-	return conf.Build()
 }

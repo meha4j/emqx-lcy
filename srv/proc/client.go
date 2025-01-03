@@ -1,4 +1,4 @@
-package srv
+package proc
 
 import (
 	context "context"
@@ -7,13 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paraskun/extd/api/proc"
-	"github.com/paraskun/extd/api/auth"
+	authapi "github.com/paraskun/extd/api/auth"
+	procapi "github.com/paraskun/extd/api/proc"
+
 	"github.com/paraskun/extd/pkg/vcas"
+	"github.com/paraskun/extd/srv/auth"
 	"go.uber.org/zap"
 )
 
-type Packet struct {
+type packet struct {
 	Topic  string      `vcas:"name,n" json:"-"`
 	Stamp  vcas.Time   `vcas:"time,t" json:"timestamp"`
 	Method vcas.Method `vcas:"method,meth,m" json:"-"`
@@ -26,25 +28,25 @@ type Packet struct {
 
 type Client struct {
 	Con string
-	Log *zap.SugaredLogger
 
+	ctl *auth.Store
 	obs string
 	buf []byte
-	pkt Packet
+	pkt packet
 	mux sync.Mutex
 
-	adapter proc.ConnectionAdapterClient
+	adapter procapi.ConnectionAdapterClient
 }
 
-func NewClient(con string, adapter proc.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
-  buf := make([]byte, 0, 0xff)
+func NewClient(con string, ctl *auth.Store, adapter procapi.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
+	buf := make([]byte, 0, 0xff)
 
 	return &Client{
 		Con: con,
-		Log: log,
 
+		ctl: ctl,
 		buf: buf,
-		pkt: Packet{
+		pkt: packet{
 			Units: "none",
 			Descr: "none",
 			Type:  "none",
@@ -71,7 +73,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 			return fmt.Errorf("unmarshal: %v", err)
 		}
 
-		if err := c.handlePacket(ctx, &c.pkt); err != nil {
+		if err := c.handlepacket(ctx, &c.pkt); err != nil {
 			return fmt.Errorf("handle: %v", err)
 		}
 
@@ -85,7 +87,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-func (c *Client) handlePacket(ctx context.Context, pkt *Packet) error {
+func (c *Client) handlepacket(ctx context.Context, pkt *packet) error {
 	if c.obs != "" {
 		return nil
 	}
@@ -118,10 +120,10 @@ func (c *Client) handlePacket(ctx context.Context, pkt *Packet) error {
 	return nil
 }
 
-func (c *Client) publish(ctx context.Context, pkt *Packet) error {
-  if !acl.Check(pkt.Topic, c.Con, auth.ClientAuthorizeRequest_PUBLISH) {
-    return nil
-  }
+func (c *Client) publish(ctx context.Context, pkt *packet) error {
+	if !c.ctl.Check(pkt.Topic, c.Con, authapi.ClientAuthorizeRequest_PUBLISH) {
+		return nil
+	}
 
 	pay, err := json.Marshal(pkt)
 
@@ -129,7 +131,7 @@ func (c *Client) publish(ctx context.Context, pkt *Packet) error {
 		return fmt.Errorf("marshal: %v", err)
 	}
 
-	res, err := c.adapter.Publish(ctx, &proc.PublishRequest{
+	res, err := c.adapter.Publish(ctx, &procapi.PublishRequest{
 		Conn:    c.Con,
 		Topic:   pkt.Topic,
 		Qos:     0,
@@ -140,7 +142,7 @@ func (c *Client) publish(ctx context.Context, pkt *Packet) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proc.ResultCode_SUCCESS {
+	if res.GetCode() != procapi.ResultCode_SUCCESS {
 		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
@@ -148,7 +150,7 @@ func (c *Client) publish(ctx context.Context, pkt *Packet) error {
 }
 
 func (c *Client) subscribe(ctx context.Context, top string) error {
-	res, err := c.adapter.Subscribe(ctx, &proc.SubscribeRequest{
+	res, err := c.adapter.Subscribe(ctx, &procapi.SubscribeRequest{
 		Conn:  c.Con,
 		Topic: top,
 		Qos:   2,
@@ -158,7 +160,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proc.ResultCode_SUCCESS {
+	if res.GetCode() != procapi.ResultCode_SUCCESS {
 		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
@@ -166,7 +168,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 }
 
 func (c *Client) unsubscribe(ctx context.Context, top string) error {
-	res, err := c.adapter.Unsubscribe(ctx, &proc.UnsubscribeRequest{
+	res, err := c.adapter.Unsubscribe(ctx, &procapi.UnsubscribeRequest{
 		Conn:  c.Con,
 		Topic: top,
 	})
@@ -175,7 +177,7 @@ func (c *Client) unsubscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proc.ResultCode_SUCCESS {
+	if res.GetCode() != procapi.ResultCode_SUCCESS {
 		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 
@@ -210,7 +212,7 @@ func (c *Client) get(ctx context.Context, top string) error {
 	return nil
 }
 
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *proc.Message) error {
+func (c *Client) OnReceivedMessage(ctx context.Context, msg *procapi.Message) error {
 	c.mux.Lock()
 	defer c.mux.Unlock()
 
@@ -240,7 +242,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *proc.Message) error
 	return nil
 }
 
-func (c *Client) send(ctx context.Context, pkt *Packet) error {
+func (c *Client) send(ctx context.Context, pkt *packet) error {
 	if pkt.Value == nil {
 		pkt.Value = "none"
 	}
@@ -252,7 +254,7 @@ func (c *Client) send(ctx context.Context, pkt *Packet) error {
 		return fmt.Errorf("marshal: %v", err)
 	}
 
-	res, err := c.adapter.Send(ctx, &proc.SendBytesRequest{
+	res, err := c.adapter.Send(ctx, &procapi.SendBytesRequest{
 		Conn:  c.Con,
 		Bytes: append(txt, 10),
 	})
@@ -261,7 +263,7 @@ func (c *Client) send(ctx context.Context, pkt *Packet) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != proc.ResultCode_SUCCESS {
+	if res.GetCode() != procapi.ResultCode_SUCCESS {
 		return fmt.Errorf("remote: %v", res.GetMessage())
 	}
 

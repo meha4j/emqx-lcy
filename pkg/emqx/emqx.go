@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"time"
 )
 
 type Server struct {
@@ -43,31 +45,114 @@ type ExHookServerUpdateRequest struct {
 	PoolSize  int    `json:"pool_size,omitempty"`
 }
 
+type options struct {
+	addr *string
+	user *string
+	pass *string
+	tout *time.Duration
+	rmax *int
+}
+
+type Option func(*options) error
+
+func WithAddr(addr string) Option {
+	return func(o *options) error {
+		o.addr = &addr
+		return nil
+	}
+}
+
+func WithUser(user string) Option {
+	return func(o *options) error {
+		o.user = &user
+		return nil
+	}
+}
+
+func WithPass(pass string) Option {
+	return func(o *options) error {
+		o.pass = &pass
+		return nil
+	}
+}
+
+func WithTimeout(tout string) Option {
+	return func(o *options) error {
+		res, err := time.ParseDuration(tout)
+
+		if err != nil {
+			return fmt.Errorf("parse: %v", err)
+		}
+
+		o.tout = &res
+		return nil
+	}
+}
+
+func WithRetries(rmax int) Option {
+	return func(o *options) error {
+		if rmax < 0 {
+			return fmt.Errorf("negative retries count")
+		}
+
+		o.rmax = &rmax
+		return nil
+	}
+}
+
 type Client struct {
-	BaseUrl string
-	Addr    string
+	Base string
+	Addr string
 
 	conn *http.Client
 	user string
 	pass string
+	tout time.Duration
+	rmax int
 }
 
-func NewClient(url, user, pass string) (*Client, error) {
-	return &Client{
-		BaseUrl: url,
-		Addr:    "localhost",
+func NewClient(base string, opts ...Option) (*Client, error) {
+	var opt options
 
+	for _, exe := range opts {
+		if err := exe(&opt); err != nil {
+			return nil, fmt.Errorf("opt: %v", err)
+		}
+	}
+
+	cli := &Client{
+		Base: base,
 		conn: &http.Client{},
-		user: user,
-		pass: pass,
-	}, nil
+	}
+
+	if opt.addr != nil {
+		cli.Addr = *opt.addr
+	}
+
+	if opt.user != nil {
+		cli.user = *opt.user
+	}
+
+	if opt.pass != nil {
+		cli.pass = *opt.pass
+	}
+
+	if opt.tout != nil {
+		cli.tout = *opt.tout
+	}
+
+	if opt.rmax != nil {
+		cli.rmax = *opt.rmax
+	}
+
+	return cli, nil
 }
 
 func (c *Client) LookupAddress(host string) error {
 	addr, err := net.LookupIP(host)
 
 	if err != nil {
-		return fmt.Errorf("dns: %v", err)
+		return fmt.Errorf("req: %v", err)
 	}
 
 	if len(addr) == 0 {
@@ -79,27 +164,41 @@ func (c *Client) LookupAddress(host string) error {
 	return nil
 }
 
+func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
+	req.SetBasicAuth(c.user, c.pass)
+
+	for r := 1; r <= c.rmax+1; r++ {
+		res, err = c.conn.Do(req)
+
+		if err == nil {
+			break
+		}
+
+		log.Printf("request failed [%d/%d]: %v\n", c.rmax+1, r, err)
+	}
+
+	return
+}
+
 func (c *Client) UpdateExProtoGateway(pay *ExProtoGatewayUpdateRequest) error {
 	bin, err := json.Marshal(pay)
 
 	if err != nil {
-		return fmt.Errorf("marshal payload: %v", err)
+		return fmt.Errorf("pay: %v", err)
 	}
 
-	url := c.BaseUrl + "/gateways/exproto"
+	url := c.Base + "/gateways/exproto"
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(bin))
 
 	if err != nil {
-		return fmt.Errorf("create request: %v", err)
+		return fmt.Errorf("req: %v", err)
 	}
 
-	req.SetBasicAuth(c.user, c.pass)
 	req.Header.Set("Content-Type", "application/json")
-
-	res, err := c.conn.Do(req)
+	res, err := c.Do(req)
 
 	if err != nil {
-		return fmt.Errorf("exec request: %v", err)
+		return fmt.Errorf("req: %v", err)
 	}
 
 	defer res.Body.Close()
@@ -110,7 +209,7 @@ func (c *Client) UpdateExProtoGateway(pay *ExProtoGatewayUpdateRequest) error {
 		_, err := buf.ReadFrom(res.Body)
 
 		if err != nil {
-			return fmt.Errorf("parse response: %v", err)
+			return fmt.Errorf("res: %v", err)
 		}
 
 		return fmt.Errorf("%v", buf.String())
@@ -123,36 +222,34 @@ func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
 	ok, err := c.CheckExHookServer(pay.Name)
 
 	if err != nil {
-		return fmt.Errorf("check server: %v", err)
+		return fmt.Errorf("check: %v", err)
 	}
 
 	bin, err := json.Marshal(pay)
 
 	if err != nil {
-		return fmt.Errorf("marshal payload: %v", err)
+		return fmt.Errorf("pay: %v", err)
 	}
 
-	url := c.BaseUrl + "/exhooks"
-	met := http.MethodPost
+	url := c.Base + "/exhooks"
+	mod := http.MethodPost
 
 	if ok {
 		url += "/" + pay.Name
-		met = http.MethodPut
+		mod = http.MethodPut
 	}
 
-	req, err := http.NewRequest(met, url, bytes.NewReader(bin))
+	req, err := http.NewRequest(mod, url, bytes.NewReader(bin))
 
 	if err != nil {
-		return fmt.Errorf("create request: %v", err)
+		return fmt.Errorf("req: %v", err)
 	}
 
-	req.SetBasicAuth(c.user, c.pass)
 	req.Header.Set("Content-Type", "application/json")
-
-	res, err := c.conn.Do(req)
+	res, err := c.Do(req)
 
 	if err != nil {
-		return fmt.Errorf("exec request: %v", err)
+		return fmt.Errorf("req: %v", err)
 	}
 
 	defer res.Body.Close()
@@ -163,7 +260,7 @@ func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
 		_, err := buf.ReadFrom(res.Body)
 
 		if err != nil {
-			return fmt.Errorf("parse response: %v", err)
+			return fmt.Errorf("res: %v", err)
 		}
 
 		return fmt.Errorf("%v", buf.String())
@@ -173,19 +270,17 @@ func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
 }
 
 func (c *Client) CheckExHookServer(name string) (bool, error) {
-	url := c.BaseUrl + "/exhooks/" + name
+	url := c.Base + "/exhooks/" + name
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 
 	if err != nil {
-		return false, fmt.Errorf("create request: %v", err)
+		return false, fmt.Errorf("req: %v", err)
 	}
 
-	req.SetBasicAuth(c.user, c.pass)
-
-	res, err := c.conn.Do(req)
+	res, err := c.Do(req)
 
 	if err != nil {
-		return false, fmt.Errorf("request exec: %v", err)
+		return false, fmt.Errorf("req: %v", err)
 	}
 
 	defer res.Body.Close()
