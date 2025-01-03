@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
-	"time"
 
 	procapi "github.com/paraskun/extd/api/proc"
 
@@ -19,7 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func Register(srv *grpc.Server, ctl *auth.Store, cli *emqx.Client, cfg *viper.Viper) error {
+func Register(srv *grpc.Server, ctl *auth.ACL, cli *emqx.Client, cfg *viper.Viper) error {
 	if err := updateRemote(cli, cfg); err != nil {
 		return fmt.Errorf("remote: %v", err)
 	}
@@ -82,7 +81,7 @@ func newAdapter(cfg *viper.Viper) (procapi.ConnectionAdapterClient, error) {
 }
 
 type service struct {
-	ctl     *auth.Store
+	ctl     *auth.ACL
 	store   sync.Map
 	adapter procapi.ConnectionAdapterClient
 

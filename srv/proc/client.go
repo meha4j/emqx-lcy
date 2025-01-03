@@ -12,7 +12,6 @@ import (
 
 	"github.com/paraskun/extd/pkg/vcas"
 	"github.com/paraskun/extd/srv/auth"
-	"go.uber.org/zap"
 )
 
 type packet struct {
@@ -29,7 +28,7 @@ type packet struct {
 type Client struct {
 	Con string
 
-	ctl *auth.Store
+	ctl *auth.ACL
 	obs string
 	buf []byte
 	pkt packet
@@ -38,7 +37,7 @@ type Client struct {
 	adapter procapi.ConnectionAdapterClient
 }
 
-func NewClient(con string, ctl *auth.Store, adapter procapi.ConnectionAdapterClient, log *zap.SugaredLogger) *Client {
+func NewClient(con string, ctl *auth.ACL, adapter procapi.ConnectionAdapterClient) *Client {
 	buf := make([]byte, 0, 0xff)
 
 	return &Client{

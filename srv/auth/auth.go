@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func Register(srv *grpc.Server, ctl *Store, cli *emqx.Client, cfg *viper.Viper) error {
+func Register(srv *grpc.Server, ctl *ACL, cli *emqx.Client, cfg *viper.Viper) error {
 	if err := updateRemote(cli, cfg); err != nil {
 		return fmt.Errorf("remote: %v", err)
 	}
@@ -49,7 +49,7 @@ func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
 
 type service struct {
 	addr string
-	ctl  *Store
+	ctl  *ACL
 
 	auth.UnimplementedHookProviderServer
 }
@@ -102,21 +102,11 @@ func (s *service) OnClientserviceenticate(_ context.Context, req *auth.ClientAut
 }
 
 func (s *service) OnClientAuthorize(_ context.Context, req *auth.ClientAuthorizeRequest) (*auth.ValuedResponse, error) {
-	ctl, ok := s.ctl.GetRules(req.Topic)
-
-	if !ok {
+	if !s.ctl.Check(req.Topic, req.Clientinfo.Clientid, req.Type) {
 		return &auth.ValuedResponse{
-			Type: auth.ValuedResponse_CONTINUE,
+			Type:  auth.ValuedResponse_STOP_AND_RETURN,
+			Value: &auth.ValuedResponse_BoolResult{BoolResult: false},
 		}, nil
-	}
-
-	for _, r := range ctl {
-		if !r.Check(req.Clientinfo.Clientid, req.Type) {
-			return &auth.ValuedResponse{
-				Type:  auth.ValuedResponse_STOP_AND_RETURN,
-				Value: &auth.ValuedResponse_BoolResult{BoolResult: false},
-			}, nil
-		}
 	}
 
 	return &auth.ValuedResponse{

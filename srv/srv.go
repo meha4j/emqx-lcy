@@ -48,12 +48,7 @@ func StartServer(opts ...Option) error {
 	port := cfg.GetInt("extd.emqx.port")
 	base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
 
-	ctl, err := auth.NewStore()
-
-	if err != nil {
-		return fmt.Errorf("acl: %v", err)
-	}
-
+	ctl := &auth.ACL{}
 	cli, err := emqx.NewClient(base,
 		emqx.WithUser(cfg.GetString("extd.emqx.user")),
 		emqx.WithPass(cfg.GetString("extd.emqx.pass")),

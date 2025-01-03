@@ -11,109 +11,59 @@ import (
 
 type Action = auth.ClientAuthorizeRequest_AuthorizeReqType
 
-type Rule interface {
-	Check(con string, act Action) bool
+type ACL struct {
+	dat map[string]*atomic.Pointer[string]
+	mux sync.RWMutex
 }
 
-type ExclusiveRule struct {
-	Owner atomic.Pointer[string]
-}
-
-func (r *ExclusiveRule) Check(con string, act Action) bool {
-	if r.Owner.CompareAndSwap(nil, &con) {
+func (ctl *ACL) Check(top, con string, act Action) bool {
+	if act != auth.ClientAuthorizeRequest_PUBLISH {
 		return true
 	}
 
-	if *r.Owner.Load() == con {
+	ctl.mux.RLock()
+	defer ctl.mux.RUnlock()
+
+	own, ok := ctl.dat[top]
+
+	if !ok {
+		return true
+	}
+
+	if own.CompareAndSwap(nil, &con) {
+		return true
+	}
+
+	if *own.Load() == con {
 		return true
 	}
 
 	return false
 }
 
-type ReadOnlyRule struct{}
+func (ctl *ACL) Fetch(con *sql.DB) error {
+	ctl.mux.Lock()
+	defer ctl.mux.Unlock()
 
-func (r *ReadOnlyRule) Check(con string, act Action) bool {
-	if act == auth.ClientAuthorizeRequest_PUBLISH {
-		return false
-	}
-
-	return true
-}
-
-type WriteOnlyRule struct{}
-
-func (r *WriteOnlyRule) Check(con string, act Action) bool {
-	if act == auth.ClientAuthorizeRequest_SUBSCRIBE {
-		return false
-	}
-
-	return true
-}
-
-type Store struct {
-	dat map[string][]Rule
-	mux sync.RWMutex
-}
-
-func NewStore() (*Store, error) {
-	return &Store{}, nil
-}
-
-func (s *Store) Fetch(con *sql.DB) error {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-
-	res, err := con.Query("SELECT COUNT(DISTINCT top) FROM rule")
+	ctl.dat = make(map[string]*atomic.Pointer[string])
+	res, err := con.Query("SELECT top FROM rule WHERE mod = 'ex'")
 
 	if err != nil {
 		return fmt.Errorf("query: %v", err)
 	}
 
-	var (
-		num int
-		top string
-		mod string
-	)
+	var top string
 
 	for res.Next() {
-		if err := res.Scan(&num); err != nil {
+		if err := res.Scan(&top); err != nil {
 			return fmt.Errorf("scan: %v", err)
 		}
+
+		ctl.dat[top] = &atomic.Pointer[string]{}
 	}
 
 	if res.Err() != nil {
 		return fmt.Errorf("scan: %v", res.Err())
-	}
-
-	s.dat = make(map[string][]Rule, num)
-	res, err = con.Query("SELECT top, mod FROM rule")
-
-	if err != nil {
-		return fmt.Errorf("query: %v", err)
-	}
-
-	for res.Next() {
-		if err := res.Scan(&top, &mod); err != nil {
-			return fmt.Errorf("scan: %v", err)
-		}
-
-		ctl, ok := s.dat[top]
-
-		if !ok {
-			ctl = make([]Rule, 0, 1)
-		}
-
-		switch mod {
-		case "ex":
-			ctl = append(ctl, &ExclusiveRule{})
-		case "ro":
-			ctl = append(ctl, &ReadOnlyRule{})
-		case "wo":
-			ctl = append(ctl, &WriteOnlyRule{})
-		}
-
-		s.dat[top] = ctl
 	}
 
 	return nil
