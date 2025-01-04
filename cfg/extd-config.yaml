@@ -8,10 +8,22 @@ extd:
   pgsql:
     host: pgsql
     port: 5432
-    name: postgres
   proc:
-    emqx:
-      adapter:
-        port: 9110
-      listener:
-        port: 20041
+    server:
+      port: 9110
+    name: vcas
+    tout: 30s
+    enable: false
+    listener:
+      name: default
+      type: tcp
+      port: 20041
+  auth:
+    name: extd
+    tout: 30s
+    trec: 60s
+    enable: false
+    action: deny
+    pgsql:
+      name: postgres
+      query: SELECT top FROM rule WHERE mod = 'ex'

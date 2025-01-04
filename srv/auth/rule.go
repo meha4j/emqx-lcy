@@ -40,10 +40,10 @@ func (ctl *ACL) Release(con string) {
 	})
 }
 
-func (ctl *ACL) Fetch(con *sql.DB) error {
+func (ctl *ACL) Fetch(con *sql.DB, query string) error {
 	ctl.Clear()
 
-	res, err := con.Query("SELECT top FROM rule WHERE mod = 'ex'")
+	res, err := con.Query(query)
 
 	if err != nil {
 		return fmt.Errorf("query: %v", err)

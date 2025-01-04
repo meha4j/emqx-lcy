@@ -17,27 +17,29 @@ func Register(srv *grpc.Server, ctl *ACL, cli *emqx.Client, cfg *viper.Viper) er
 		return fmt.Errorf("remote: %v", err)
 	}
 
-	host := cfg.GetString("extd.pgsql.host")
-	port := cfg.GetInt("extd.pgsql.port")
-	user := cfg.GetString("extd.pgsql.user")
-	pass := cfg.GetString("extd.pgsql.pass")
-	name := cfg.GetString("extd.auth.pgsql.name")
-	addr := fmt.Sprintf("postgres://%s:%v/%s?user=%s&password=%s", host, port, name, user, pass)
-
-	auth.RegisterHookProviderServer(srv, &service{addr: addr, ctl: ctl})
+	auth.RegisterHookProviderServer(srv, &service{
+		dbQuery: cfg.GetString("extd.auth.pgsql.query"),
+		dbAddr: fmt.Sprintf("postgres://%s:%v/%s?user=%s&password=%s",
+			cfg.GetString("extd.pgsql.host"),
+			cfg.GetInt("extd.pgsql.port"),
+			cfg.GetString("extd.auth.pgsql.name"),
+			cfg.GetString("extd.pgsql.user"),
+			cfg.GetString("extd.pgsql.pass"),
+		),
+		ctl: ctl,
+	})
 
 	return nil
 }
 
 func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
-	port := cfg.GetInt("extd.port")
 	err := cli.UpdateExHookServer(&emqx.ExHookServerUpdateRequest{
-		Name:      "extd",
-		Addr:      fmt.Sprintf("http://%s:%d", cli.Addr, port),
-		Enable:    false,
-		Timeout:   "5s",
-		Reconnect: "60s",
-		Action:    "deny",
+		Name:      cfg.GetString("extd.auth.name"),
+		Enable:    cfg.GetBool("extd.auth.enable"),
+		Action:    cfg.GetString("extd.auth.action"),
+		Timeout:   cfg.GetString("extd.auth.tout"),
+		Reconnect: cfg.GetString("extd.auth.trec"),
+		Addr:      fmt.Sprintf("http://%s:%d", cli.Addr, cfg.GetInt("extd.port")),
 	})
 
 	if err != nil {
@@ -48,14 +50,15 @@ func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
 }
 
 type service struct {
-	addr string
-	ctl  *ACL
+	dbQuery string
+	dbAddr  string
+	ctl     *ACL
 
 	auth.UnimplementedHookProviderServer
 }
 
 func (s *service) OnProviderLoaded(ctx context.Context, _ *auth.ProviderLoadedRequest) (*auth.LoadedResponse, error) {
-	con, err := sql.Open("pgx", s.addr)
+	con, err := sql.Open("pgx", s.dbAddr)
 
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %v", err)
@@ -63,7 +66,7 @@ func (s *service) OnProviderLoaded(ctx context.Context, _ *auth.ProviderLoadedRe
 
 	defer con.Close()
 
-	if err := s.ctl.Fetch(con); err != nil {
+	if err := s.ctl.Fetch(con, s.dbQuery); err != nil {
 		return nil, fmt.Errorf("fetch: %v", err)
 	}
 

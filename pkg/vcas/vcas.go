@@ -1,3 +1,6 @@
+// Package vcas implements encoding and decoding of VCAS.
+// The mapping between VCAS and Go values is described
+// in the documentation for the Marshal and Unmarshal functions.
 package vcas
 
 import (
@@ -14,6 +17,7 @@ const (
 	Version = "2.0.0-SNAPSHOT"
 
 	Stamp = "02.01.2006 15_04_05.000"
+	None  = "none"
 
 	PUB Method = iota + 1
 	SUB
@@ -73,7 +77,7 @@ func (t *Time) UnmarshalText(b []byte) error {
 	tm, err := time.Parse(Stamp, string(b))
 
 	if err != nil {
-		return fmt.Errorf("parse formatted: %v", err)
+		return fmt.Errorf("parse stamp: %v", err)
 	}
 
 	t.Time = tm
@@ -97,8 +101,31 @@ func (t *Time) UnmarshalJSON(json []byte) error {
 	return nil
 }
 
+// Unmarshal parses the VCAS-encoded data and stores the result
+// in the value pointed by a.
+//
+// Unmarshal traverses the value a recursively.
+//
+// If an encountered value implements [TextUmarshaler] and is
+// not a nil pointer, Unmarshal calls [TextUnmarshaler.UnmarshalText].
+//
+// If no [TextUnmarshaler.UnmarshalText] method is present and the
+// value is one of the primitive types, Unmarshal calls corresponding
+// method from [strconv] package.
+//
+// Otherwise, Unmarshal uses the following type-dependent encodings:
+//
+// To unmarshal VCAS into a struct (map), Unmarshal matches incoming object
+// tags (keys) to the keys from parsed bytes. If there are several tags provided,
+// the first matching one is selected.
+//
+// To unmarshal VCAS into a slice, Unmarshal traverses tokens recursively.
 func Unmarshal(b []byte, a any) error {
 	v := reflect.ValueOf(a)
+
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return fmt.Errorf("unsupported target")
+	}
 
 	return unmarshal(b, &v)
 }
@@ -112,9 +139,7 @@ func unmarshal(b []byte, v *reflect.Value) error {
 
 	if v.CanInterface() {
 		if t, ok := v.Interface().(encoding.TextUnmarshaler); ok {
-			err := t.UnmarshalText(b)
-
-			if err != nil {
+			if err := t.UnmarshalText(b); err != nil {
 				return fmt.Errorf("provided: %v", err)
 			}
 
@@ -124,9 +149,7 @@ func unmarshal(b []byte, v *reflect.Value) error {
 
 	if v.CanAddr() && v.Addr().CanInterface() {
 		if t, ok := v.Addr().Interface().(encoding.TextUnmarshaler); ok {
-			err := t.UnmarshalText(b)
-
-			if err != nil {
+			if err := t.UnmarshalText(b); err != nil {
 				return fmt.Errorf("provided: %v", err)
 			}
 
@@ -138,84 +161,114 @@ func unmarshal(b []byte, v *reflect.Value) error {
 		return nil
 	}
 
-	m := string(b)
+	msg := string(b)
 
 	switch v.Type().Kind() {
 	case reflect.Interface:
-		v.Set(reflect.ValueOf(m))
+		v.Set(reflect.ValueOf(msg))
 	case reflect.String:
-		v.SetString(m)
+		v.SetString(msg)
 	case reflect.Int:
-		if p, err := strconv.ParseInt(m, 10, 0); err == nil {
+		if p, err := strconv.ParseInt(msg, 10, 0); err == nil {
 			v.SetInt(p)
+		} else {
+			return err
 		}
 	case reflect.Int8:
-		if p, err := strconv.ParseInt(m, 10, 8); err == nil {
+		if p, err := strconv.ParseInt(msg, 10, 8); err == nil {
 			v.SetInt(p)
+		} else {
+			return err
 		}
 	case reflect.Int16:
-		if p, err := strconv.ParseInt(m, 10, 16); err == nil {
+		if p, err := strconv.ParseInt(msg, 10, 16); err == nil {
 			v.SetInt(p)
+		} else {
+			return err
 		}
 	case reflect.Int32:
-		if p, err := strconv.ParseInt(m, 10, 32); err == nil {
+		if p, err := strconv.ParseInt(msg, 10, 32); err == nil {
 			v.SetInt(p)
+		} else {
+			return err
 		}
 	case reflect.Int64:
-		if p, err := strconv.ParseInt(m, 10, 64); err == nil {
+		if p, err := strconv.ParseInt(msg, 10, 64); err == nil {
 			v.SetInt(p)
+		} else {
+			return err
 		}
 	case reflect.Uint:
-		if p, err := strconv.ParseUint(m, 10, 0); err == nil {
+		if p, err := strconv.ParseUint(msg, 10, 0); err == nil {
 			v.SetUint(p)
+		} else {
+			return err
 		}
 	case reflect.Uint8:
-		if p, err := strconv.ParseUint(m, 10, 8); err == nil {
+		if p, err := strconv.ParseUint(msg, 10, 8); err == nil {
 			v.SetUint(p)
+		} else {
+			return err
 		}
 	case reflect.Uint16:
-		if p, err := strconv.ParseUint(m, 10, 16); err == nil {
+		if p, err := strconv.ParseUint(msg, 10, 16); err == nil {
 			v.SetUint(p)
+		} else {
+			return err
 		}
 	case reflect.Uint32:
-		if p, err := strconv.ParseUint(m, 10, 32); err == nil {
+		if p, err := strconv.ParseUint(msg, 10, 32); err == nil {
 			v.SetUint(p)
+		} else {
+			return err
 		}
 	case reflect.Uint64:
-		if p, err := strconv.ParseUint(m, 10, 64); err == nil {
+		if p, err := strconv.ParseUint(msg, 10, 64); err == nil {
 			v.SetUint(p)
+		} else {
+			return err
 		}
 	case reflect.Float32:
-		if p, err := strconv.ParseFloat(m, 32); err == nil {
+		if p, err := strconv.ParseFloat(msg, 32); err == nil {
 			v.SetFloat(p)
+		} else {
+			return err
 		}
 	case reflect.Float64:
-		if p, err := strconv.ParseFloat(m, 64); err == nil {
+		if p, err := strconv.ParseFloat(msg, 64); err == nil {
 			v.SetFloat(p)
+		} else {
+			return err
 		}
 	case reflect.Complex64:
-		if p, err := strconv.ParseComplex(m, 64); err == nil {
+		if p, err := strconv.ParseComplex(msg, 64); err == nil {
 			v.SetComplex(p)
+		} else {
+			return err
 		}
 	case reflect.Complex128:
-		if p, err := strconv.ParseComplex(m, 128); err == nil {
+		if p, err := strconv.ParseComplex(msg, 128); err == nil {
 			v.SetComplex(p)
+		} else {
+			return err
 		}
 	case reflect.Bool:
-		if p, err := strconv.ParseBool(m); err == nil {
+		if p, err := strconv.ParseBool(msg); err == nil {
 			v.SetBool(p)
+		} else {
+			return err
 		}
 	case reflect.Map:
-		if err := unmarshalMap(parseMap(m), v); err != nil {
-			return fmt.Errorf("map: %v", err)
+		if err := unmarshalMap(parseMap(msg), v); err != nil {
+			return err
 		}
 	case reflect.Slice:
-		if err := unmarshalSlice(parseSlice(m), v); err != nil {
-			return fmt.Errorf("slice: %v", err)
+		if err := unmarshalSlice(parseSlice(msg), v); err != nil {
+			return err
 		}
 	case reflect.Struct:
-		if err := unmarshalStruct(parseMap(m), v); err != nil {
-			return fmt.Errorf("struct: %v", err)
+		if err := unmarshalStruct(parseMap(msg), v); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unsupported type")
@@ -224,33 +277,33 @@ func unmarshal(b []byte, v *reflect.Value) error {
 	return nil
 }
 
-func unmarshalMap(tok map[string]string, v *reflect.Value) error {
-	if v.Type().Key().Kind() != reflect.String {
+func unmarshalMap(tok map[string]string, val *reflect.Value) error {
+	if val.Type().Key().Kind() != reflect.String {
 		return fmt.Errorf("unsupported key type")
 	}
 
-	for mk, mv := range tok {
-		e := reflect.New(v.Type().Elem())
+	for k, v := range tok {
+		e := reflect.New(val.Type().Elem())
 
-		if err := unmarshal([]byte(mv), &e); err != nil {
-			return fmt.Errorf("token (%s): %v", mk, err)
+		if err := unmarshal([]byte(v), &e); err != nil {
+			return fmt.Errorf("token (%s): %v", k, err)
 		}
 
-		v.SetMapIndex(reflect.ValueOf(mk), e.Elem())
+		val.SetMapIndex(reflect.ValueOf(k), e.Elem())
 	}
 
 	return nil
 }
 
-func unmarshalSlice(tok []string, v *reflect.Value) error {
-	for i, sv := range tok {
-		e := reflect.New(v.Type().Elem())
+func unmarshalSlice(tok []string, val *reflect.Value) error {
+	for i, v := range tok {
+		e := reflect.New(val.Type().Elem())
 
-		if err := unmarshal([]byte(sv), &e); err != nil {
+		if err := unmarshal([]byte(v), &e); err != nil {
 			return fmt.Errorf("token (%d): %v", i, err)
 		}
 
-		v.Set(reflect.Append(*v, e.Elem()))
+		val.Set(reflect.Append(*val, e.Elem()))
 	}
 
 	return nil
@@ -259,25 +312,26 @@ func unmarshalSlice(tok []string, v *reflect.Value) error {
 func unmarshalStruct(tok map[string]string, val *reflect.Value) error {
 	t := val.Type()
 
-fields:
+fs:
 	for i := range t.NumField() {
-		f := val.Field(i)
+		sf := val.Field(i)
+		tf := t.Field(i)
 
-		if a, ok := t.Field(i).Tag.Lookup("vcas"); ok {
-			for _, a := range strings.Split(a, ",") {
-				if v, ok := tok[a]; ok {
-					if err := unmarshal([]byte(v), &f); err != nil {
-						return fmt.Errorf("field (%d): %v", i, err)
+		if ns, ok := tf.Tag.Lookup("vcas"); ok {
+			for _, n := range strings.Split(ns, ",") {
+				if v, ok := tok[n]; ok {
+					if err := unmarshal([]byte(v), &sf); err != nil {
+						return fmt.Errorf("token (%s): %v", tf.Name, err)
 					}
 
-					continue fields
+					continue fs
 				}
 			}
 		}
 
-		if f.Type().Kind() == reflect.Struct {
-			if err := unmarshalStruct(tok, &f); err != nil {
-				return fmt.Errorf("field (%d): %v", i, err)
+		if sf.Type().Kind() == reflect.Struct {
+			if err := unmarshalStruct(tok, &sf); err != nil {
+				return fmt.Errorf("token (%s): %v", tf.Name, err)
 			}
 		}
 	}
@@ -305,6 +359,20 @@ func parseSlice(m string) []string {
 	return strings.Split(m, ",")
 }
 
+// Marshal returns the VCAS encoding of a.
+//
+// Unmarshal traverses the value a recursively.
+//
+// If an encountered value implements [TextMarshaler] and is
+// not a nil pointer, Marshal calls [TextMarshaler.MarshalText].
+//
+// If no [TextMarshaler.MarshalText] method is present and the
+// value is one of the primitive types, Marshal calls corresponding
+// method from [fmt] package to encode value as string.
+//
+// Otherwise, to marshal struct, map or slice, Marshal traverses tokens recursively,
+// selecting struct tags as keys. If there are multiple tags provided,
+// the first one selected.
 func Marshal(a any) ([]byte, error) {
 	var b strings.Builder
 
@@ -353,8 +421,8 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 	}
 
 	switch v.Kind() {
-	case reflect.Interface:
-		b.Write([]byte(fmt.Sprint(v.Interface())))
+	case reflect.Pointer, reflect.Interface:
+		b.WriteString(None)
 	case reflect.String:
 		b.WriteString(v.String())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -369,15 +437,15 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 		b.WriteString(fmt.Sprint(v.Bool()))
 	case reflect.Map:
 		if err := marshalMap(v, b); err != nil {
-			return fmt.Errorf("map: %v", err)
+			return err
 		}
 	case reflect.Slice:
 		if err := marshalSlice(v, b); err != nil {
-			return fmt.Errorf("slice: %v", err)
+			return err
 		}
 	case reflect.Struct:
 		if err := marshalStruct(v, b); err != nil {
-			return fmt.Errorf("struct: %v", err)
+			return err
 		}
 	default:
 		return fmt.Errorf("unsupported type")
@@ -387,24 +455,24 @@ func marshal(v *reflect.Value, b *strings.Builder) error {
 }
 
 func marshalMap(v *reflect.Value, b *strings.Builder) error {
-	iter := v.MapRange()
+	itr := v.MapRange()
 
-	for i := 0; iter.Next(); i++ {
-		key := iter.Key()
-		val := iter.Value()
+	for itr.Next() {
+		key := itr.Key()
+		val := itr.Value()
 
-		if i != 0 {
+		if b.Len() != 0 {
 			b.WriteRune('|')
 		}
 
 		if err := marshal(&key, b); err != nil {
-			return fmt.Errorf("token (%d): key: %v", i, err)
+			return fmt.Errorf("token (%s): key: %v", key.String(), err)
 		}
 
 		b.WriteRune(':')
 
 		if err := marshal(&val, b); err != nil {
-			return fmt.Errorf("token (%d): value: %v", i, err)
+			return fmt.Errorf("token (%s): value: %v", key.String(), err)
 		}
 	}
 
@@ -431,9 +499,10 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 	t := v.Type()
 
 	for i := range t.NumField() {
-		f := v.Field(i)
+		sf := v.Field(i)
+		tf := t.Field(i)
 
-		if a, ok := t.Field(i).Tag.Lookup("vcas"); ok {
+		if a, ok := tf.Tag.Lookup("vcas"); ok {
 			a = strings.Split(a, ",")[0]
 
 			if b.Len() != 0 {
@@ -443,21 +512,21 @@ func marshalStruct(v *reflect.Value, b *strings.Builder) error {
 			b.WriteString(a)
 			b.WriteRune(':')
 
-			if err := marshal(&f, b); err != nil {
-				return fmt.Errorf("field (%d): %v", i, err)
+			if err := marshal(&sf, b); err != nil {
+				return fmt.Errorf("token (%s): %v", tf.Name, err)
 			}
 
 			continue
 		}
 
-		switch f.Type().Kind() {
+		switch sf.Type().Kind() {
 		case reflect.Map:
-			if err := marshalMap(&f, b); err != nil {
-				return fmt.Errorf("field (%d): %v", i, err)
+			if err := marshalMap(&sf, b); err != nil {
+				return fmt.Errorf("token (%s): %v", tf.Name, err)
 			}
 		case reflect.Struct:
-			if err := marshalStruct(&f, b); err != nil {
-				return fmt.Errorf("field (%d): %v", i, err)
+			if err := marshalStruct(&sf, b); err != nil {
+				return fmt.Errorf("token (%s): %v", tf.Name, err)
 			}
 		}
 	}

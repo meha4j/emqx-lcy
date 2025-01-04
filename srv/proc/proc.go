@@ -3,6 +3,7 @@ package proc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -35,25 +36,21 @@ func Register(srv *grpc.Server, ctl *auth.ACL, cli *emqx.Client, cfg *viper.Vipe
 }
 
 func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
-	ap := cfg.GetInt("extd.proc.emqx.adapter.port")
-	lp := cfg.GetInt("extd.proc.emqx.listener.port")
-	hp := cfg.GetInt("extd.port")
-
 	err := cli.UpdateExProtoGateway(&emqx.ExProtoGatewayUpdateRequest{
-		Name:    "exproto",
-		Enable:  false,
-		Timeout: "30s",
+		Name:    cfg.GetString("extd.proc.name"),
+		Enable:  cfg.GetBool("extd.proc.enable"),
+		Timeout: cfg.GetString("extd.proc.tout"),
 		Server: emqx.Server{
-			Bind: strconv.Itoa(ap),
+			Bind: strconv.Itoa(cfg.GetInt("extd.proc.server.port")),
 		},
 		Handler: emqx.Handler{
-			Addr: fmt.Sprintf("http://%s:%d", cli.Addr, hp),
+			Addr: fmt.Sprintf("http://%s:%d", cli.Addr, cfg.GetInt("extd.port")),
 		},
 		Listeners: []emqx.Listener{
 			{
-				Name: "default",
-				Type: "tcp",
-				Bind: strconv.Itoa(lp),
+				Name: cfg.GetString("extd.proc.listener.name"),
+				Type: cfg.GetString("extd.proc.listener.type"),
+				Bind: strconv.Itoa(cfg.GetInt("extd.proc.listener.port")),
 			},
 		},
 	})
@@ -66,10 +63,7 @@ func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
 }
 
 func newAdapter(cfg *viper.Viper) (procapi.ConnectionAdapterClient, error) {
-	port := cfg.GetInt("extd.proc.emqx.adapter.port")
-	host := cfg.GetString("extd.emqx.host")
-	addr := fmt.Sprintf("%s:%d", host, port)
-
+	addr := fmt.Sprintf("%s:%d", cfg.GetString("extd.emqx.host"), cfg.GetInt("extd.proc.server.port"))
 	crd := grpc.WithTransportCredentials(insecure.NewCredentials())
 	con, err := grpc.NewClient(addr, crd)
 
@@ -90,27 +84,29 @@ type service struct {
 
 func (s *service) OnSocketCreated(ctx context.Context, req *procapi.SocketCreatedRequest) (*procapi.EmptySuccess, error) {
 	res, err := s.adapter.Authenticate(ctx, &procapi.AuthenticateRequest{
-		Conn: req.GetConn(),
+		Conn: req.Conn,
 		Clientinfo: &procapi.ClientInfo{
 			ProtoName: vcas.Name,
 			ProtoVer:  vcas.Version,
-			Clientid:  req.GetConn(),
+			Clientid:  req.Conn,
 		},
 	})
 
 	if err != nil {
+		slog.Error("auth", "conn", req.Conninfo.String(), "err", err)
 		s.adapter.Close(ctx, &procapi.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if res.GetCode() != procapi.ResultCode_SUCCESS {
+	if res.Code != procapi.ResultCode_SUCCESS {
+		slog.Error("auth", "conn", req.Conninfo.String(), "code", res.Code)
 		s.adapter.Close(ctx, &procapi.CloseSocketRequest{Conn: req.Conn})
 
-		return nil, status.Error(codes.Unauthenticated, res.GetMessage())
+		return nil, status.Error(codes.Unauthenticated, res.Message)
 	}
 
-	s.store.Store(req.GetConn(), NewClient(req.GetConn(), s.ctl, s.adapter))
+	s.store.Store(req.Conn, NewClient(req.Conn, s.ctl, s.adapter))
 
 	return nil, nil
 }
@@ -123,13 +119,14 @@ func (s *service) OnSocketClosed(_ context.Context, req *procapi.SocketClosedReq
 }
 
 func (s *service) OnReceivedBytes(ctx context.Context, req *procapi.ReceivedBytesRequest) (*procapi.EmptySuccess, error) {
-	v, ok := s.store.Load(req.GetConn())
+	v, ok := s.store.Load(req.Conn)
 
 	if !ok {
 		return nil, nil
 	}
 
-	if err := v.(*Client).OnReceivedBytes(ctx, req.GetBytes()); err != nil {
+	if err := v.(*Client).OnReceivedBytes(ctx, req.Bytes); err != nil {
+		slog.Error("bytes", "content", string(req.Bytes), "err", err)
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
 
@@ -141,14 +138,15 @@ func (s *service) OnTimerTimeout(ctx context.Context, req *procapi.TimerTimeoutR
 }
 
 func (s *service) OnReceivedMessages(ctx context.Context, req *procapi.ReceivedMessagesRequest) (*procapi.EmptySuccess, error) {
-	c, ok := s.store.Load(req.GetConn())
+	c, ok := s.store.Load(req.Conn)
 
 	if !ok {
 		return nil, nil
 	}
 
-	for _, msg := range req.GetMessages() {
+	for _, msg := range req.Messages {
 		if err := c.(*Client).OnReceivedMessage(ctx, msg); err != nil {
+			slog.Error("message", "content", msg, "err", err)
 			return nil, status.Error(codes.Unknown, err.Error())
 		}
 	}

@@ -3,6 +3,7 @@ package srv
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"time"
 
@@ -38,10 +39,10 @@ func StartServer(opts ...Option) error {
 	cfg, err := configure(opts)
 
 	if err != nil {
-		return fmt.Errorf("config: %v", err)
+		return fmt.Errorf("cfg: %v", err)
 	}
 
-	log.Println("starting server. configuration:")
+	slog.Info("starting server. configuration:")
 	cfg.DebugTo(log.Writer())
 
 	host := cfg.GetString("extd.emqx.host")
@@ -61,7 +62,7 @@ func StartServer(opts ...Option) error {
 	}
 
 	if err := cli.LookupAddress("extd"); err != nil {
-		return fmt.Errorf("lookup: %v", err)
+		return fmt.Errorf("lookup address: %v", err)
 	}
 
 	srv := grpc.NewServer()
@@ -94,12 +95,22 @@ func configure(opts []Option) (*viper.Viper, error) {
 	cfg.SetDefault("extd.emqx.host", "emqx")
 	cfg.SetDefault("extd.emqx.port", 18083)
 	cfg.SetDefault("extd.emqx.rmax", 5)
-	cfg.SetDefault("extd.emqx.tout", "5s")
-	cfg.SetDefault("extd.db.host", "pgsql")
-	cfg.SetDefault("extd.db.port", 5432)
-	cfg.SetDefault("extd.proc.emqx.adapter.port", 9110)
-	cfg.SetDefault("extd.proc.emqx.listener.port", 20041)
-	cfg.SetDefault("extd.auth.db.name", "postgres")
+	cfg.SetDefault("extd.emqx.tout", "15s")
+	cfg.SetDefault("extd.pgsql.host", "pgsql")
+	cfg.SetDefault("extd.pgsql.port", 5432)
+	cfg.SetDefault("extd.proc.server.port", 9110)
+	cfg.SetDefault("extd.proc.name", "vcas")
+	cfg.SetDefault("extd.proc.tout", "30s")
+	cfg.SetDefault("extd.proc.enable", false)
+	cfg.SetDefault("extd.proc.listener.name", "default")
+	cfg.SetDefault("extd.proc.listener.type", "tcp")
+	cfg.SetDefault("extd.proc.listener.port", 20041)
+	cfg.SetDefault("extd.auth.name", "extd")
+	cfg.SetDefault("extd.auth.tout", "30s")
+	cfg.SetDefault("extd.auth.trec", "60s")
+	cfg.SetDefault("extd.auth.enable", false)
+	cfg.SetDefault("extd.auth.action", "deny")
+	cfg.SetDefault("extd.auth.pgsql.name", "postgres")
 
 	var options options
 

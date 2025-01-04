@@ -26,7 +26,7 @@ type packet struct {
 }
 
 type Client struct {
-	Con string
+	Conn string
 
 	ctl *auth.ACL
 	obs string
@@ -37,11 +37,11 @@ type Client struct {
 	adapter procapi.ConnectionAdapterClient
 }
 
-func NewClient(con string, ctl *auth.ACL, adapter procapi.ConnectionAdapterClient) *Client {
+func NewClient(conn string, ctl *auth.ACL, adapter procapi.ConnectionAdapterClient) *Client {
 	buf := make([]byte, 0, 0xff)
 
 	return &Client{
-		Con: con,
+		Conn: conn,
 
 		ctl: ctl,
 		buf: buf,
@@ -72,7 +72,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 			return fmt.Errorf("unmarshal: %v", err)
 		}
 
-		if err := c.handlepacket(ctx, &c.pkt); err != nil {
+		if err := c.handlePacket(ctx, &c.pkt); err != nil {
 			return fmt.Errorf("handle: %v", err)
 		}
 
@@ -86,7 +86,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-func (c *Client) handlepacket(ctx context.Context, pkt *packet) error {
+func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 	if c.obs != "" {
 		return nil
 	}
@@ -120,7 +120,7 @@ func (c *Client) handlepacket(ctx context.Context, pkt *packet) error {
 }
 
 func (c *Client) publish(ctx context.Context, pkt *packet) error {
-	if !c.ctl.Check(pkt.Topic, c.Con, authapi.ClientAuthorizeRequest_PUBLISH) {
+	if !c.ctl.Check(pkt.Topic, c.Conn, authapi.ClientAuthorizeRequest_PUBLISH) {
 		return nil
 	}
 
@@ -131,7 +131,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 	}
 
 	res, err := c.adapter.Publish(ctx, &procapi.PublishRequest{
-		Conn:    c.Con,
+		Conn:    c.Conn,
 		Topic:   pkt.Topic,
 		Qos:     0,
 		Payload: pay,
@@ -141,8 +141,8 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.GetMessage())
+	if res.Code != procapi.ResultCode_SUCCESS {
+		return fmt.Errorf("remote: %v", res.Message)
 	}
 
 	return nil
@@ -150,7 +150,7 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 
 func (c *Client) subscribe(ctx context.Context, top string) error {
 	res, err := c.adapter.Subscribe(ctx, &procapi.SubscribeRequest{
-		Conn:  c.Con,
+		Conn:  c.Conn,
 		Topic: top,
 		Qos:   2,
 	})
@@ -159,8 +159,8 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.GetMessage())
+	if res.Code != procapi.ResultCode_SUCCESS {
+		return fmt.Errorf("remote: %v", res.Message)
 	}
 
 	return nil
@@ -168,7 +168,7 @@ func (c *Client) subscribe(ctx context.Context, top string) error {
 
 func (c *Client) unsubscribe(ctx context.Context, top string) error {
 	res, err := c.adapter.Unsubscribe(ctx, &procapi.UnsubscribeRequest{
-		Conn:  c.Con,
+		Conn:  c.Conn,
 		Topic: top,
 	})
 
@@ -176,8 +176,8 @@ func (c *Client) unsubscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.GetMessage())
+	if res.Code != procapi.ResultCode_SUCCESS {
+		return fmt.Errorf("remote: %v", res.Message)
 	}
 
 	return nil
@@ -216,21 +216,21 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *procapi.Message) er
 	defer c.mux.Unlock()
 
 	if c.obs != "" {
-		if c.obs != msg.GetTopic() {
+		if c.obs != msg.Topic {
 			return nil
 		}
 
 		c.obs = ""
 
-		if err := c.unsubscribe(ctx, msg.GetTopic()); err != nil {
+		if err := c.unsubscribe(ctx, msg.Topic); err != nil {
 			return fmt.Errorf("unsubscribe: %v", err)
 		}
 	}
 
-	c.pkt.Topic = msg.GetTopic()
+	c.pkt.Topic = msg.Topic
 	c.pkt.Value = nil
 
-	if err := json.Unmarshal(msg.GetPayload(), &c.pkt); err != nil {
+	if err := json.Unmarshal(msg.Payload, &c.pkt); err != nil {
 		return fmt.Errorf("parse: %v", err)
 	}
 
@@ -254,7 +254,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 	}
 
 	res, err := c.adapter.Send(ctx, &procapi.SendBytesRequest{
-		Conn:  c.Con,
+		Conn:  c.Conn,
 		Bytes: append(txt, 10),
 	})
 
@@ -262,8 +262,8 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("adapter: %v", err)
 	}
 
-	if res.GetCode() != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.GetMessage())
+	if res.Code != procapi.ResultCode_SUCCESS {
+		return fmt.Errorf("remote: %v", res.Message)
 	}
 
 	return nil
