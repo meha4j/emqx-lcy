@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"log"
 
 	"github.com/paraskun/extd/srv"
 )
@@ -16,8 +17,9 @@ func init() {
 
 func main() {
 	flag.Parse()
+	log.SetFlags(log.LstdFlags)
 
 	if err := srv.StartServer(srv.WithConfig(cfg), srv.WithSecret(sec)); err != nil {
-    panic(err)
-  }
+		panic(err)
+	}
 }

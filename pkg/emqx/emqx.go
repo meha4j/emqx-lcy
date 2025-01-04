@@ -174,7 +174,8 @@ func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
 			break
 		}
 
-		log.Printf("request failed [%d/%d]: %v\n", c.rmax+1, r, err)
+		log.Printf("request failed [%d/%d]: %v\n", r, c.rmax+1, err)
+		time.Sleep(c.tout)
 	}
 
 	return

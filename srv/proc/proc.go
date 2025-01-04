@@ -35,8 +35,8 @@ func Register(srv *grpc.Server, ctl *auth.ACL, cli *emqx.Client, cfg *viper.Vipe
 }
 
 func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
-	ap := cfg.GetInt("extd.procapi.emqx.adapter.port")
-	lp := cfg.GetInt("extd.procapi.emqx.listener.port")
+	ap := cfg.GetInt("extd.proc.emqx.adapter.port")
+	lp := cfg.GetInt("extd.proc.emqx.listener.port")
 	hp := cfg.GetInt("extd.port")
 
 	err := cli.UpdateExProtoGateway(&emqx.ExProtoGatewayUpdateRequest{
@@ -66,7 +66,7 @@ func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
 }
 
 func newAdapter(cfg *viper.Viper) (procapi.ConnectionAdapterClient, error) {
-	port := cfg.GetInt("extd.procapi.emqx.adapter.port")
+	port := cfg.GetInt("extd.proc.emqx.adapter.port")
 	host := cfg.GetString("extd.emqx.host")
 	addr := fmt.Sprintf("%s:%d", host, port)
 
@@ -116,7 +116,8 @@ func (s *service) OnSocketCreated(ctx context.Context, req *procapi.SocketCreate
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *procapi.SocketClosedRequest) (*procapi.EmptySuccess, error) {
-	s.store.Delete(req.GetConn)
+	s.store.Delete(req.Conn)
+	s.ctl.Release(req.Conn)
 
 	return nil, nil
 }

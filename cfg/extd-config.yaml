@@ -3,8 +3,8 @@ extd:
   emqx:
     host: emqx
     port: 18083
-    retry: 5
-    timeout: 15s
+    rmax: 5
+    tout: 15s
   pgsql:
     host: pgsql
     port: 5432

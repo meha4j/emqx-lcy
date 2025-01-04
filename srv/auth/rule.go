@@ -4,48 +4,45 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/paraskun/extd/api/auth"
 )
 
 type Action = auth.ClientAuthorizeRequest_AuthorizeReqType
 
+const (
+	PUB = auth.ClientAuthorizeRequest_PUBLISH
+	SUB = auth.ClientAuthorizeRequest_SUBSCRIBE
+)
+
 type ACL struct {
-	dat map[string]*atomic.Pointer[string]
-	mux sync.RWMutex
+	sync.Map
 }
 
 func (ctl *ACL) Check(top, con string, act Action) bool {
-	if act != auth.ClientAuthorizeRequest_PUBLISH {
+	if act != PUB {
 		return true
 	}
 
-	ctl.mux.RLock()
-	defer ctl.mux.RUnlock()
+	ctl.CompareAndSwap(top, nil, con)
 
-	own, ok := ctl.dat[top]
-
-	if !ok {
-		return true
+	if own, ok := ctl.Load(top); ok && own != con {
+		return false
 	}
 
-	if own.CompareAndSwap(nil, &con) {
-		return true
-	}
+	return true
+}
 
-	if *own.Load() == con {
+func (ctl *ACL) Release(con string) {
+	ctl.Range(func(key, value any) bool {
+		ctl.CompareAndSwap(key, con, nil)
 		return true
-	}
-
-	return false
+	})
 }
 
 func (ctl *ACL) Fetch(con *sql.DB) error {
-	ctl.mux.Lock()
-	defer ctl.mux.Unlock()
+	ctl.Clear()
 
-	ctl.dat = make(map[string]*atomic.Pointer[string])
 	res, err := con.Query("SELECT top FROM rule WHERE mod = 'ex'")
 
 	if err != nil {
@@ -59,7 +56,7 @@ func (ctl *ACL) Fetch(con *sql.DB) error {
 			return fmt.Errorf("scan: %v", err)
 		}
 
-		ctl.dat[top] = &atomic.Pointer[string]{}
+		ctl.Store(top, nil)
 	}
 
 	if res.Err() != nil {

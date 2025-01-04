@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/paraskun/extd/api/auth"
 	"github.com/paraskun/extd/pkg/emqx"
 	"github.com/spf13/viper"
@@ -55,7 +55,7 @@ type service struct {
 }
 
 func (s *service) OnProviderLoaded(ctx context.Context, _ *auth.ProviderLoadedRequest) (*auth.LoadedResponse, error) {
-	con, err := sql.Open("postgres", s.addr)
+	con, err := sql.Open("pgx", s.addr)
 
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %v", err)
@@ -91,6 +91,7 @@ func (*service) OnClientConnected(context.Context, *auth.ClientConnectedRequest)
 }
 
 func (s *service) OnClientDisconnected(_ context.Context, req *auth.ClientDisconnectedRequest) (*auth.EmptySuccess, error) {
+	s.ctl.Release(req.Clientinfo.Clientid)
 	return &auth.EmptySuccess{}, nil
 }
 
