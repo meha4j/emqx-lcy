@@ -1,25 +1,15 @@
-volumes:
-  emqx-data:
-    name: emqx-data
-    external: true
-  pgsql-data:
-    name: pgsql-data
-    external: true
-
 networks:
   nano:
     driver: bridge
 
 services:
-  pgsql:
+  psql:
     image: postgres
     ports:
       - 5432:5432
     environment:
       POSTGRES_PASSWORD: pass
       PGDATA: /var/lib/postgresql/data/pgdata
-    volumes:
-      - pgsql-data:/var/lib/postgresql/data
     networks:
       - nano
   emqx:
@@ -41,19 +31,18 @@ services:
       TZ: Asia/Novosibirsk
     networks:
       - nano
+    depends_on:
+      - emqx
+      - psql
     develop:
       watch:
-        - action: rebuild
-          path: ./cmd
-        - action: rebuild
-          path: ./internal
         - action: rebuild
           path: ./pkg
         - action: rebuild
           path: ./srv
         - action: sync+restart
-          path: ./config/extd-config.yaml
+          path: ./cfg/extd-config.yaml
           target: /etc/extd-config.yaml
         - action: sync+restart
-          path: ./config/extd-secret.yaml
+          path: ./cfg/extd-secret.yaml
           target: /etc/extd-secret.yaml

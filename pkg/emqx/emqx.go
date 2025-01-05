@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -152,7 +152,7 @@ func (c *Client) LookupAddress(host string) error {
 	addr, err := net.LookupIP(host)
 
 	if err != nil {
-		return fmt.Errorf("req: %v", err)
+		return fmt.Errorf("net: %v", err)
 	}
 
 	if len(addr) == 0 {
@@ -174,7 +174,7 @@ func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
 			break
 		}
 
-		log.Printf("request failed [%d/%d]: %v\n", r, c.rmax+1, err)
+		slog.Error("request failed", "att", r, "rmax", c.rmax+1, "err", err)
 		time.Sleep(c.tout)
 	}
 

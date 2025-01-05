@@ -22,4 +22,5 @@ ENV EXTD_CONFIG="/etc/extd-config.yaml"
 ENV EXTD_SECRET="/etc/extd-secret.yaml"
 
 EXPOSE 9111
+
 CMD /extd --cfg=$EXTD_CONFIG --sec=$EXTD_SECRET

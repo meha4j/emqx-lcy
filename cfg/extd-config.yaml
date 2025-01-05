@@ -5,10 +5,10 @@ extd:
     port: 18083
     rmax: 5
     tout: 15s
-  pgsql:
-    host: pgsql
+  psql:
+    host: psql
     port: 5432
-  proc:
+  gate:
     server:
       port: 9110
     name: vcas
@@ -18,12 +18,12 @@ extd:
       name: default
       type: tcp
       port: 20041
-  auth:
+  hook:
     name: extd
     tout: 30s
     trec: 60s
     enable: false
     action: deny
-    pgsql:
+    psql:
       name: postgres
       query: SELECT top FROM rule WHERE mod = 'ex'
