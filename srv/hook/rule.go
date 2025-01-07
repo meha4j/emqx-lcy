@@ -1,18 +1,18 @@
-package auth
+package hook
 
 import (
 	"database/sql"
 	"fmt"
 	"sync"
 
-	"github.com/paraskun/extd/api/auth"
+	hookapi "github.com/paraskun/extd/api/hook"
 )
 
-type Action = auth.ClientAuthorizeRequest_AuthorizeReqType
+type Action = hookapi.ClientAuthorizeRequest_AuthorizeReqType
 
 const (
-	PUB = auth.ClientAuthorizeRequest_PUBLISH
-	SUB = auth.ClientAuthorizeRequest_SUBSCRIBE
+	PUB = hookapi.ClientAuthorizeRequest_PUBLISH
+	SUB = hookapi.ClientAuthorizeRequest_SUBSCRIBE
 )
 
 type ACL struct {

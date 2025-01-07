@@ -10,7 +10,7 @@ type RuleStore struct {
 }
 
 func NewRuleStore(db *sql.DB) RuleStore {
-	return RuleStore{db}
+	return RuleStore{db: db}
 }
 
 type Rule struct {
