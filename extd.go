@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log/slog"
+	"os"
 
 	"github.com/paraskun/extd/srv"
 )
@@ -21,6 +22,6 @@ func main() {
 
 	if err := srv.StartServer(srv.WithConfig(cfg), srv.WithSecret(sec)); err != nil {
 		slog.Error("srv", "err", err)
-		panic(err)
+		os.Exit(-1)
 	}
 }

@@ -15,7 +15,7 @@ FROM alpine
 RUN apk add --no-cache tzdata
 
 COPY --from=builder /extd /
-COPY cfg/ /etc
+COPY etc/ /etc
 
 ENV TZ="Asia/Novosibirsk"
 ENV EXTD_CONFIG="/etc/extd-config.yaml"

@@ -11,7 +11,7 @@ extd:
   gate:
     server:
       port: 9110
-    name: vcas
+    name: exproto
     tout: 30s
     enable: false
     listener:
@@ -26,4 +26,3 @@ extd:
     action: deny
     psql:
       name: postgres
-      query: SELECT top FROM rule WHERE mod = 'ex'

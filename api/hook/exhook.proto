@@ -21,7 +21,7 @@ option java_multiple_files = true;
 option java_package = "io.emqx.exhook";
 option java_outer_classname = "EmqxExHookProto";
 
-option go_package = "./api/auth";
+option go_package = "./api/hook";
 
 // The exhook proto version should be fixed as `v2` in EMQX v5.x
 // to make sure the exhook proto version is compatible

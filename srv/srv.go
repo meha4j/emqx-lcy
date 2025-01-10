@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/paraskun/extd/pkg/emqx"
-	"github.com/paraskun/extd/srv/auth"
-	"github.com/paraskun/extd/srv/proc"
+	"github.com/paraskun/extd/srv/gate"
+	"github.com/paraskun/extd/srv/hook"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 )
@@ -49,7 +49,6 @@ func StartServer(opts ...Option) error {
 	port := cfg.GetInt("extd.emqx.port")
 	base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
 
-	ctl := &auth.ACL{}
 	cli, err := emqx.NewClient(base,
 		emqx.WithUser(cfg.GetString("extd.emqx.user")),
 		emqx.WithPass(cfg.GetString("extd.emqx.pass")),
@@ -67,16 +66,15 @@ func StartServer(opts ...Option) error {
 
 	srv := grpc.NewServer()
 
-	if err := proc.Register(srv, ctl, cli, cfg); err != nil {
-		return fmt.Errorf("proc: %v", err)
+	if err := gate.Register(srv, cfg, gate.WithClient(cli)); err != nil {
+		return fmt.Errorf("gate: %v", err)
 	}
 
-	if err := auth.Register(srv, ctl, cli, cfg); err != nil {
-		return fmt.Errorf("auth: %v", err)
+	if err := hook.Register(srv, cfg, hook.WithClient(cli)); err != nil {
+		return fmt.Errorf("gate: %v", err)
 	}
 
-	port = cfg.GetInt("extd.port")
-	net, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	net, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GetInt("extd.port")))
 
 	if err != nil {
 		return fmt.Errorf("net: %v", err)
@@ -98,19 +96,19 @@ func configure(opts []Option) (*viper.Viper, error) {
 	cfg.SetDefault("extd.emqx.tout", "15s")
 	cfg.SetDefault("extd.pgsql.host", "pgsql")
 	cfg.SetDefault("extd.pgsql.port", 5432)
-	cfg.SetDefault("extd.proc.server.port", 9110)
-	cfg.SetDefault("extd.proc.name", "vcas")
-	cfg.SetDefault("extd.proc.tout", "30s")
-	cfg.SetDefault("extd.proc.enable", false)
-	cfg.SetDefault("extd.proc.listener.name", "default")
-	cfg.SetDefault("extd.proc.listener.type", "tcp")
-	cfg.SetDefault("extd.proc.listener.port", 20041)
-	cfg.SetDefault("extd.auth.name", "extd")
-	cfg.SetDefault("extd.auth.tout", "30s")
-	cfg.SetDefault("extd.auth.trec", "60s")
-	cfg.SetDefault("extd.auth.enable", false)
-	cfg.SetDefault("extd.auth.action", "deny")
-	cfg.SetDefault("extd.auth.pgsql.name", "postgres")
+	cfg.SetDefault("extd.gate.server.port", 9110)
+	cfg.SetDefault("extd.gate.name", "exproto")
+	cfg.SetDefault("extd.gate.tout", "30s")
+	cfg.SetDefault("extd.gate.enable", false)
+	cfg.SetDefault("extd.gate.listener.name", "default")
+	cfg.SetDefault("extd.gate.listener.type", "tcp")
+	cfg.SetDefault("extd.gate.listener.port", 20041)
+	cfg.SetDefault("extd.hook.name", "extd")
+	cfg.SetDefault("extd.hook.tout", "30s")
+	cfg.SetDefault("extd.hook.trec", "60s")
+	cfg.SetDefault("extd.hook.enable", false)
+	cfg.SetDefault("extd.hook.action", "deny")
+	cfg.SetDefault("extd.hook.pgsql.name", "postgres")
 
 	var options options
 

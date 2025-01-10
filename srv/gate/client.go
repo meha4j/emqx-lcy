@@ -1,17 +1,15 @@
-package proc
+package gate
 
 import (
-	context "context"
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
-	authapi "github.com/paraskun/extd/api/auth"
-	procapi "github.com/paraskun/extd/api/proc"
+	"github.com/paraskun/extd/api/gate"
 
 	"github.com/paraskun/extd/pkg/vcas"
-	"github.com/paraskun/extd/srv/auth"
 )
 
 type packet struct {
@@ -19,39 +17,30 @@ type packet struct {
 	Stamp  vcas.Time   `vcas:"time,t" json:"timestamp"`
 	Method vcas.Method `vcas:"method,meth,m" json:"-"`
 	Value  any         `vcas:"val,value,v" json:"value,omitempty"`
-
-	Units string `vcas:"units" json:"-"`
-	Descr string `vcas:"descr" json:"-"`
-	Type  string `vcas:"type" json:"-"`
+	Units  any         `vcas:"units" json:"-"`
+	Descr  any         `vcas:"descr" json:"-"`
+	Type   any         `vcas:"type" json:"-"`
 }
 
 type Client struct {
 	Conn string
 
-	ctl *auth.ACL
 	obs string
 	buf []byte
 	pkt packet
 	mux sync.Mutex
 
-	adapter procapi.ConnectionAdapterClient
+	cli gate.ConnectionAdapterClient
 }
 
-func NewClient(conn string, ctl *auth.ACL, adapter procapi.ConnectionAdapterClient) *Client {
+func NewClient(conn string, cli gate.ConnectionAdapterClient) *Client {
 	buf := make([]byte, 0, 0xff)
 
 	return &Client{
 		Conn: conn,
 
-		ctl: ctl,
+		cli: cli,
 		buf: buf,
-		pkt: packet{
-			Units: "none",
-			Descr: "none",
-			Type:  "none",
-		},
-
-		adapter: adapter,
 	}
 }
 
@@ -98,15 +87,15 @@ func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 	switch c.pkt.Method {
 	case vcas.PUB:
 		if err := c.publish(ctx, &c.pkt); err != nil {
-			return fmt.Errorf("publish: %v", err)
+			return fmt.Errorf("pub: %v", err)
 		}
 	case vcas.SUB:
 		if err := c.subscribe(ctx, c.pkt.Topic); err != nil {
-			return fmt.Errorf("subscribe: %v", err)
+			return fmt.Errorf("sube: %v", err)
 		}
 	case vcas.USB:
 		if err := c.unsubscribe(ctx, c.pkt.Topic); err != nil {
-			return fmt.Errorf("unsubscribe: %v", err)
+			return fmt.Errorf("usb: %v", err)
 		}
 	case vcas.GET:
 		if err := c.get(ctx, c.pkt.Topic); err != nil {
@@ -120,17 +109,13 @@ func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 }
 
 func (c *Client) publish(ctx context.Context, pkt *packet) error {
-	if !c.ctl.Check(pkt.Topic, c.Conn, authapi.ClientAuthorizeRequest_PUBLISH) {
-		return nil
-	}
-
 	pay, err := json.Marshal(pkt)
 
 	if err != nil {
 		return fmt.Errorf("marshal: %v", err)
 	}
 
-	res, err := c.adapter.Publish(ctx, &procapi.PublishRequest{
+	res, err := c.cli.Publish(ctx, &gate.PublishRequest{
 		Conn:    c.Conn,
 		Topic:   pkt.Topic,
 		Qos:     0,
@@ -138,46 +123,46 @@ func (c *Client) publish(ctx context.Context, pkt *packet) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
+		return fmt.Errorf("cli: %v", err)
 	}
 
-	if res.Code != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.Message)
+	if res.Code != gate.ResultCode_SUCCESS {
+		return fmt.Errorf("req: %v", res.Message)
 	}
 
 	return nil
 }
 
 func (c *Client) subscribe(ctx context.Context, top string) error {
-	res, err := c.adapter.Subscribe(ctx, &procapi.SubscribeRequest{
+	res, err := c.cli.Subscribe(ctx, &gate.SubscribeRequest{
 		Conn:  c.Conn,
 		Topic: top,
 		Qos:   2,
 	})
 
 	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
+		return fmt.Errorf("cli: %v", err)
 	}
 
-	if res.Code != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.Message)
+	if res.Code != gate.ResultCode_SUCCESS {
+		return fmt.Errorf("req: %v", res.Message)
 	}
 
 	return nil
 }
 
 func (c *Client) unsubscribe(ctx context.Context, top string) error {
-	res, err := c.adapter.Unsubscribe(ctx, &procapi.UnsubscribeRequest{
+	res, err := c.cli.Unsubscribe(ctx, &gate.UnsubscribeRequest{
 		Conn:  c.Conn,
 		Topic: top,
 	})
 
 	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
+		return fmt.Errorf("cli: %v", err)
 	}
 
-	if res.Code != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.Message)
+	if res.Code != gate.ResultCode_SUCCESS {
+		return fmt.Errorf("req: %v", res.Message)
 	}
 
 	return nil
@@ -187,7 +172,7 @@ func (c *Client) get(ctx context.Context, top string) error {
 	err := c.subscribe(ctx, top)
 
 	if err != nil {
-		return fmt.Errorf("subscribe: %v", err)
+		return fmt.Errorf("sub: %v", err)
 	}
 
 	c.obs = top
@@ -211,7 +196,7 @@ func (c *Client) get(ctx context.Context, top string) error {
 	return nil
 }
 
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *procapi.Message) error {
+func (c *Client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error {
 	c.mux.Lock()
 	defer c.mux.Unlock()
 
@@ -223,7 +208,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *procapi.Message) er
 		c.obs = ""
 
 		if err := c.unsubscribe(ctx, msg.Topic); err != nil {
-			return fmt.Errorf("unsubscribe: %v", err)
+			return fmt.Errorf("usb: %v", err)
 		}
 	}
 
@@ -242,10 +227,6 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *procapi.Message) er
 }
 
 func (c *Client) send(ctx context.Context, pkt *packet) error {
-	if pkt.Value == nil {
-		pkt.Value = "none"
-	}
-
 	pkt.Method = vcas.PUB
 	txt, err := vcas.Marshal(pkt)
 
@@ -253,17 +234,17 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 		return fmt.Errorf("marshal: %v", err)
 	}
 
-	res, err := c.adapter.Send(ctx, &procapi.SendBytesRequest{
+	res, err := c.cli.Send(ctx, &gate.SendBytesRequest{
 		Conn:  c.Conn,
 		Bytes: append(txt, 10),
 	})
 
 	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
+		return fmt.Errorf("cli: %v", err)
 	}
 
-	if res.Code != procapi.ResultCode_SUCCESS {
-		return fmt.Errorf("remote: %v", res.Message)
+	if res.Code != gate.ResultCode_SUCCESS {
+		return fmt.Errorf("req: %v", res.Message)
 	}
 
 	return nil

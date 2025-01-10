@@ -1,4 +1,4 @@
-package proc
+package gate
 
 import (
 	"context"
@@ -7,11 +7,10 @@ import (
 	"strconv"
 	"sync"
 
-	procapi "github.com/paraskun/extd/api/proc"
+	"github.com/paraskun/extd/api/gate"
 
 	"github.com/paraskun/extd/pkg/emqx"
 	"github.com/paraskun/extd/pkg/vcas"
-	"github.com/paraskun/extd/srv/auth"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,73 +18,80 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func Register(srv *grpc.Server, ctl *auth.ACL, cli *emqx.Client, cfg *viper.Viper) error {
-	if err := updateRemote(cli, cfg); err != nil {
-		return fmt.Errorf("remote: %v", err)
-	}
-
-	adapter, err := newAdapter(cfg)
-
-	if err != nil {
-		return fmt.Errorf("adapter: %v", err)
-	}
-
-	procapi.RegisterConnectionUnaryHandlerServer(srv, &service{ctl: ctl, adapter: adapter})
-
-	return nil
+type options struct {
+	cli *emqx.Client
 }
 
-func updateRemote(cli *emqx.Client, cfg *viper.Viper) error {
-	err := cli.UpdateExProtoGateway(&emqx.ExProtoGatewayUpdateRequest{
-		Name:    cfg.GetString("extd.proc.name"),
-		Enable:  cfg.GetBool("extd.proc.enable"),
-		Timeout: cfg.GetString("extd.proc.tout"),
-		Server: emqx.Server{
-			Bind: strconv.Itoa(cfg.GetInt("extd.proc.server.port")),
-		},
-		Handler: emqx.Handler{
-			Addr: fmt.Sprintf("http://%s:%d", cli.Addr, cfg.GetInt("extd.port")),
-		},
-		Listeners: []emqx.Listener{
-			{
-				Name: cfg.GetString("extd.proc.listener.name"),
-				Type: cfg.GetString("extd.proc.listener.type"),
-				Bind: strconv.Itoa(cfg.GetInt("extd.proc.listener.port")),
+type Option func(opts *options) error
+
+func WithClient(cli *emqx.Client) Option {
+	return func(opts *options) error {
+		opts.cli = cli
+		return nil
+	}
+}
+
+func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
+	var opt options
+
+	for _, exe := range opts {
+		if err := exe(&opt); err != nil {
+			return fmt.Errorf("opt: %v", err)
+		}
+	}
+
+	if opt.cli != nil {
+		if err := opt.cli.UpdateExProtoGateway(&emqx.ExProtoGatewayUpdateRequest{
+			Name:    cfg.GetString("extd.gate.name"),
+			Enable:  cfg.GetBool("extd.gate.enable"),
+			Timeout: cfg.GetString("extd.gate.tout"),
+			Server: emqx.Server{
+				Bind: strconv.Itoa(cfg.GetInt("extd.gate.server.port")),
 			},
-		},
-	})
+			Handler: emqx.Handler{
+				Addr: fmt.Sprintf("http://%s:%d", opt.cli.Addr, cfg.GetInt("extd.port")),
+			},
+			Listeners: []emqx.Listener{
+				{
+					Name: cfg.GetString("extd.gate.listener.name"),
+					Type: cfg.GetString("extd.gate.listener.type"),
+					Bind: strconv.Itoa(cfg.GetInt("extd.gate.listener.port")),
+				},
+			},
+		}); err != nil {
+			return fmt.Errorf("upd: %v", err)
+		}
+	}
+
+	crd := grpc.WithTransportCredentials(insecure.NewCredentials())
+	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
+		cfg.GetString("extd.emqx.host"),
+		cfg.GetInt("extd.gate.server.port"),
+	), crd)
 
 	if err != nil {
-		return fmt.Errorf("update: %v", err)
+		return fmt.Errorf("cli: %v", err)
 	}
+
+	cli := gate.NewConnectionAdapterClient(con)
+	svc := &service{cli: cli}
+
+	gate.RegisterConnectionUnaryHandlerServer(srv, svc)
 
 	return nil
-}
-
-func newAdapter(cfg *viper.Viper) (procapi.ConnectionAdapterClient, error) {
-	addr := fmt.Sprintf("%s:%d", cfg.GetString("extd.emqx.host"), cfg.GetInt("extd.proc.server.port"))
-	crd := grpc.WithTransportCredentials(insecure.NewCredentials())
-	con, err := grpc.NewClient(addr, crd)
-
-	if err != nil {
-		return nil, fmt.Errorf("grpc: %v", err)
-	}
-
-	return procapi.NewConnectionAdapterClient(con), nil
 }
 
 type service struct {
-	ctl     *auth.ACL
-	store   sync.Map
-	adapter procapi.ConnectionAdapterClient
+	dat sync.Map
+	cli gate.ConnectionAdapterClient
 
-	procapi.UnimplementedConnectionUnaryHandlerServer
+	gate.UnimplementedConnectionUnaryHandlerServer
 }
 
-func (s *service) OnSocketCreated(ctx context.Context, req *procapi.SocketCreatedRequest) (*procapi.EmptySuccess, error) {
-	res, err := s.adapter.Authenticate(ctx, &procapi.AuthenticateRequest{
+func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRequest) (*gate.EmptySuccess, error) {
+	res, err := s.cli.Authenticate(ctx, &gate.AuthenticateRequest{
 		Conn: req.Conn,
-		Clientinfo: &procapi.ClientInfo{
+		Clientinfo: &gate.ClientInfo{
 			ProtoName: vcas.Name,
 			ProtoVer:  vcas.Version,
 			Clientid:  req.Conn,
@@ -94,32 +100,31 @@ func (s *service) OnSocketCreated(ctx context.Context, req *procapi.SocketCreate
 
 	if err != nil {
 		slog.Error("auth", "conn", req.Conninfo.String(), "err", err)
-		s.adapter.Close(ctx, &procapi.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if res.Code != procapi.ResultCode_SUCCESS {
+	if res.Code != gate.ResultCode_SUCCESS {
 		slog.Error("auth", "conn", req.Conninfo.String(), "code", res.Code)
-		s.adapter.Close(ctx, &procapi.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.Message)
 	}
 
-	s.store.Store(req.Conn, NewClient(req.Conn, s.ctl, s.adapter))
+	s.dat.Store(req.Conn, NewClient(req.Conn, s.cli))
 
 	return nil, nil
 }
 
-func (s *service) OnSocketClosed(_ context.Context, req *procapi.SocketClosedRequest) (*procapi.EmptySuccess, error) {
-	s.store.Delete(req.Conn)
-	s.ctl.Release(req.Conn)
+func (s *service) OnSocketClosed(_ context.Context, req *gate.SocketClosedRequest) (*gate.EmptySuccess, error) {
+	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
-func (s *service) OnReceivedBytes(ctx context.Context, req *procapi.ReceivedBytesRequest) (*procapi.EmptySuccess, error) {
-	v, ok := s.store.Load(req.Conn)
+func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRequest) (*gate.EmptySuccess, error) {
+	v, ok := s.dat.Load(req.Conn)
 
 	if !ok {
 		return nil, nil
@@ -133,12 +138,12 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *procapi.ReceivedByte
 	return nil, nil
 }
 
-func (s *service) OnTimerTimeout(ctx context.Context, req *procapi.TimerTimeoutRequest) (*procapi.EmptySuccess, error) {
+func (s *service) OnTimerTimeout(ctx context.Context, req *gate.TimerTimeoutRequest) (*gate.EmptySuccess, error) {
 	return nil, nil
 }
 
-func (s *service) OnReceivedMessages(ctx context.Context, req *procapi.ReceivedMessagesRequest) (*procapi.EmptySuccess, error) {
-	c, ok := s.store.Load(req.Conn)
+func (s *service) OnReceivedMessages(ctx context.Context, req *gate.ReceivedMessagesRequest) (*gate.EmptySuccess, error) {
+	c, ok := s.dat.Load(req.Conn)
 
 	if !ok {
 		return nil, nil

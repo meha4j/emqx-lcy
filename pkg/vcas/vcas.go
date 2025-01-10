@@ -74,7 +74,7 @@ func (t Time) MarshalText() ([]byte, error) {
 }
 
 func (t *Time) UnmarshalText(b []byte) error {
-	tm, err := time.Parse(Stamp, string(b))
+	tm, err := time.ParseInLocation(Stamp, string(b), time.Local)
 
 	if err != nil {
 		return fmt.Errorf("parse stamp: %v", err)
@@ -297,6 +297,10 @@ func unmarshalMap(tok map[string]string, val *reflect.Value) error {
 
 func unmarshalSlice(tok []string, val *reflect.Value) error {
 	for i, v := range tok {
+		if val.Type().Elem().Kind() == reflect.Map {
+			return fmt.Errorf("token (%d): unsupported type (map)", i)
+		}
+
 		e := reflect.New(val.Type().Elem())
 
 		if err := unmarshal([]byte(v), &e); err != nil {
@@ -316,6 +320,10 @@ fs:
 	for i := range t.NumField() {
 		sf := val.Field(i)
 		tf := t.Field(i)
+
+		if sf.Type().Kind() == reflect.Map {
+			return fmt.Errorf("token (%s): unsupported type (map)", tf.Name)
+		}
 
 		if ns, ok := tf.Tag.Lookup("vcas"); ok {
 			for _, n := range strings.Split(ns, ",") {
