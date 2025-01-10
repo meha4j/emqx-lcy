@@ -48,3 +48,9 @@ services:
         - action: sync+restart
           path: ./cfg/extd-secret.yaml
           target: /etc/extd-secret.yaml
+  grafana:
+    image: grafana/grafana-oss
+    ports:
+      - 3000:3000
+    networks:
+      - nano

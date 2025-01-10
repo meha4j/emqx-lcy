@@ -2,17 +2,19 @@ package hook
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log/slog"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/paraskun/extd/api/hook"
 	"github.com/paraskun/extd/pkg/emqx"
+	"github.com/valyala/fastjson"
 
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
+)
+
+const (
+  SMT = "INSERT INTO %s (timestamp, payload) VALUES (to_timestamp(%d/1000.0), '%s')"
 )
 
 type options struct {
@@ -50,7 +52,8 @@ func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
 		}
 	}
 
-	con, err := pgx.Connect(context.Background(), "postgres://postgres:pass@psql:5432/postgres")
+	ctx := context.Background()
+	con, err := pgx.Connect(ctx, "postgres://postgres:pass@psql:5432/postgres")
 
 	if err != nil {
 		return fmt.Errorf("db: %v", err)
@@ -146,38 +149,30 @@ func (*service) OnSessionTerminated(context.Context, *hook.SessionTerminatedRequ
 }
 
 func (s *service) OnMessagePublish(ctx context.Context, req *hook.MessagePublishRequest) (*hook.ValuedResponse, error) {
-	slog.Debug("pub", "top", req.Message.Topic, "pay", string(req.Message.Payload))
+	var stamp uint64
 
-	pay := make(map[string]any)
+	json, err := fastjson.ParseBytes(req.Message.Payload)
 
-	if err := json.Unmarshal(req.Message.Payload, &pay); err != nil {
-		return nil, fmt.Errorf("pay: %v", err)
+	if err != nil {
+		return nil, fmt.Errorf("json: %v", err)
 	}
 
-	var keys strings.Builder
-	var vals strings.Builder
+	obj, err := json.Object()
 
-	for key, val := range pay {
-		if keys.Len() != 0 {
-			keys.WriteString(", ")
-			vals.WriteString(", ")
-		}
-
-		keys.WriteString(key)
-
-		switch key {
-		case "timestamp":
-			vals.WriteString(fmt.Sprintf("to_timestamp(%d/1000.0) at time zone 'Asia/Novosibirsk'", uint64(val.(float64))))
-		default:
-			if s, ok := val.(string); ok {
-				vals.WriteString(fmt.Sprintf("'%s'", s))
-			} else {
-				vals.WriteString(fmt.Sprintf("%v", val))
-			}
-		}
+	if err != nil {
+		return nil, fmt.Errorf("json: %v", err)
 	}
 
-	s.db.Exec(ctx, fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", req.Message.Topic, keys.String(), vals.String()))
+	val := obj.Get("timestamp")
+
+	if val == nil {
+		stamp = req.Message.Timestamp
+	} else {
+		stamp = val.GetUint64()
+	}
+
+	obj.Del("timestamp")
+	s.db.Exec(ctx, fmt.Sprintf(SMT, req.Message.Topic, stamp, string(obj.MarshalTo(make([]byte, 0, 60)))))
 
 	return &hook.ValuedResponse{
 		Type: hook.ValuedResponse_CONTINUE,
