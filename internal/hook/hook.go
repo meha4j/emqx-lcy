@@ -3,18 +3,22 @@ package hook
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/paraskun/extd/api/hook"
-	"github.com/paraskun/extd/pkg/emqx"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spf13/viper"
 	"github.com/valyala/fastjson"
 
-	"github.com/spf13/viper"
 	"google.golang.org/grpc"
+
+	"github.com/paraskun/extd/emqx"
+	"github.com/paraskun/extd/internal/api/hook"
 )
 
 const (
-  SMT = "INSERT INTO %s (timestamp, payload) VALUES (to_timestamp(%d/1000.0), '%s')"
+	SMT = "INSERT INTO %s (timestamp, payload) VALUES (to_timestamp(%d/1000.0), '%s')"
 )
 
 type options struct {
@@ -53,19 +57,66 @@ func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
 	}
 
 	ctx := context.Background()
-	con, err := pgx.Connect(ctx, "postgres://postgres:pass@psql:5432/postgres")
+	con, err := pgxpool.New(ctx, "postgres://postgres:pass@psql:5432/postgres")
 
 	if err != nil {
 		return fmt.Errorf("db: %v", err)
 	}
 
-	hook.RegisterHookProviderServer(srv, &service{db: con})
+	hook.RegisterHookProviderServer(srv, &service{con: con})
 
 	return nil
 }
 
+type series struct {
+	Cap uint
+
+	len uint
+  tpl string
+	dat *strings.Builder
+	mux sync.Mutex
+}
+
+func newSeries(top string, cap uint) *series {
+  tpl := fmt.Sprintf("INSERT INTO %s (timestamp, payload) VALUES ", top)
+	dat := &strings.Builder{}
+
+	dat.WriteString(tpl)
+
+	return &series{
+		Cap: cap,
+    tpl: tpl,
+		dat: dat,
+	}
+}
+
+func (s *series) append(qry string) (string, bool) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+
+	if s.len != 0 {
+		s.dat.WriteRune(',')
+	}
+
+	s.dat.WriteString(qry)
+	s.len += 1
+
+	if s.len == s.Cap {
+		qry = s.dat.String()
+
+		s.dat.Reset()
+    s.dat.WriteString(s.tpl)
+		s.len = 0
+
+		return qry, true
+	} else {
+		return "", false
+	}
+}
+
 type service struct {
-	db *pgx.Conn
+	con *pgxpool.Pool
+	que sync.Map
 
 	hook.UnimplementedHookProviderServer
 }
@@ -149,34 +200,42 @@ func (*service) OnSessionTerminated(context.Context, *hook.SessionTerminatedRequ
 }
 
 func (s *service) OnMessagePublish(ctx context.Context, req *hook.MessagePublishRequest) (*hook.ValuedResponse, error) {
-	var stamp uint64
-
-	json, err := fastjson.ParseBytes(req.Message.Payload)
+	que, _ := s.que.LoadOrStore(req.Message.Topic, newSeries(req.Message.Topic, 5))
+	qry, err := toQuery(req.Message.Payload)
 
 	if err != nil {
-		return nil, fmt.Errorf("json: %v", err)
+		return nil, fmt.Errorf("pay: %v", err)
+	}
+
+	if qry, ok := que.(*series).append(qry); ok {
+    slog.Debug("store", "query", qry)
+		s.con.Exec(ctx, qry)
+	}
+
+	return &hook.ValuedResponse{
+		Type:  hook.ValuedResponse_CONTINUE,
+		Value: &hook.ValuedResponse_BoolResult{BoolResult: true},
+	}, nil
+}
+
+func toQuery(pay []byte) (string, error) {
+	json, err := fastjson.ParseBytes(pay)
+
+	if err != nil {
+		return "", fmt.Errorf("json: %v", err)
 	}
 
 	obj, err := json.Object()
 
 	if err != nil {
-		return nil, fmt.Errorf("json: %v", err)
+		return "", fmt.Errorf("pay: %v", err)
 	}
 
-	val := obj.Get("timestamp")
-
-	if val == nil {
-		stamp = req.Message.Timestamp
-	} else {
-		stamp = val.GetUint64()
-	}
-
+	time := obj.Get("timestamp").GetUint64()
 	obj.Del("timestamp")
-	s.db.Exec(ctx, fmt.Sprintf(SMT, req.Message.Topic, stamp, string(obj.MarshalTo(make([]byte, 0, 60)))))
+	data := obj.MarshalTo(make([]byte, 0, 60))
 
-	return &hook.ValuedResponse{
-		Type: hook.ValuedResponse_CONTINUE,
-	}, nil
+	return fmt.Sprintf("(to_timestamp(%d/1000.0), '%s')", time, string(data)), nil
 }
 
 func (*service) OnMessageDelivered(context.Context, *hook.MessageDeliveredRequest) (*hook.EmptySuccess, error) {

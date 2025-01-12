@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/paraskun/extd/api/gate"
+	"github.com/paraskun/extd/internal/api/gate"
 
-	"github.com/paraskun/extd/pkg/emqx"
-	"github.com/paraskun/extd/pkg/vcas"
+	"github.com/paraskun/extd/emqx"
+	"github.com/paraskun/extd/vcas"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

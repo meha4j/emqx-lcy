@@ -2,9 +2,9 @@ FROM golang:latest AS builder
 
 WORKDIR /app
 
-COPY api/ ./api
-COPY pkg/ ./pkg
-COPY srv/ ./srv
+COPY vcas/ ./vcas
+COPY emqx/ ./emqx
+COPY internal/ ./internal
 COPY go.mod go.sum extd.go .
 
 RUN go mod download

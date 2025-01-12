@@ -39,14 +39,18 @@ services:
     develop:
       watch:
         - action: rebuild
-          path: ./pkg
+          path: ./vcas
         - action: rebuild
-          path: ./srv
+          path: ./emqx
+        - action: rebuild
+          path: ./internal
+        - action: rebuild
+          path: ./extd.go
         - action: sync+restart
-          path: ./cfg/extd-config.yaml
+          path: ./etc/extd-config.yaml
           target: /etc/extd-config.yaml
         - action: sync+restart
-          path: ./cfg/extd-secret.yaml
+          path: ./etc/extd-secret.yaml
           target: /etc/extd-secret.yaml
   grafana:
     image: grafana/grafana-oss

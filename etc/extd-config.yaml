@@ -4,7 +4,7 @@ extd:
     host: emqx
     port: 18083
     rmax: 5
-    tout: 15s
+    tout: 5s
   psql:
     host: psql
     port: 5432
