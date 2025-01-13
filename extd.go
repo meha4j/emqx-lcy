@@ -91,7 +91,7 @@ func start(opts ...option) error {
 	}
 
 	if err := hook.Register(srv, cfg, hook.WithClient(cli)); err != nil {
-		return fmt.Errorf("gate: %v", err)
+		return fmt.Errorf("hook: %v", err)
 	}
 
 	net, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GetInt("extd.port")))
@@ -129,6 +129,7 @@ func configure(opts []option) (*viper.Viper, error) {
 	cfg.SetDefault("extd.hook.enable", false)
 	cfg.SetDefault("extd.hook.action", "deny")
 	cfg.SetDefault("extd.hook.pgsql.name", "postgres")
+  cfg.SetDefault("extd.hook.buf.cap", 5)
 
 	var options options
 

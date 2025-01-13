@@ -13,7 +13,7 @@ import (
 
 type packet struct {
 	Topic  string      `vcas:"name,n" json:"-"`
-	Stamp  vcas.Time   `vcas:"time,t" json:"timestamp"`
+	Stamp  vcas.Time   `vcas:"time,t" json:"stamp"`
 	Method vcas.Method `vcas:"method,meth,m" json:"-"`
 	Value  any         `vcas:"val,value,v" json:"value,omitempty"`
 	Units  any         `vcas:"units" json:"-"`

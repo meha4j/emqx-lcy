@@ -8,9 +8,9 @@ import (
 	"sync"
 
 	"github.com/paraskun/extd/internal/api/gate"
+	"github.com/paraskun/extd/vcas"
 
 	"github.com/paraskun/extd/emqx"
-	"github.com/paraskun/extd/vcas"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -95,6 +95,7 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 			ProtoName: vcas.Name,
 			ProtoVer:  vcas.Version,
 			Clientid:  req.Conn,
+			Username:  req.Conn,
 		},
 	})
 

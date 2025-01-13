@@ -4,10 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
-	"sync"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
 	"github.com/valyala/fastjson"
 
@@ -15,10 +12,6 @@ import (
 
 	"github.com/paraskun/extd/emqx"
 	"github.com/paraskun/extd/internal/api/hook"
-)
-
-const (
-	SMT = "INSERT INTO %s (timestamp, payload) VALUES (to_timestamp(%d/1000.0), '%s')"
 )
 
 type options struct {
@@ -56,67 +49,23 @@ func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
 		}
 	}
 
-	ctx := context.Background()
-	con, err := pgxpool.New(ctx, "postgres://postgres:pass@psql:5432/postgres")
+	store, err := newStore(
+		context.Background(),
+		"postgres://postgres:pass@psql:5432/postgres",
+		cfg.GetUint("extd.hook.buf.qcap"),
+	)
 
 	if err != nil {
-		return fmt.Errorf("db: %v", err)
+		return fmt.Errorf("store: %v", err)
 	}
 
-	hook.RegisterHookProviderServer(srv, &service{con: con})
+	hook.RegisterHookProviderServer(srv, &service{store: store})
 
 	return nil
 }
 
-type series struct {
-	Cap uint
-
-	len uint
-  tpl string
-	dat *strings.Builder
-	mux sync.Mutex
-}
-
-func newSeries(top string, cap uint) *series {
-  tpl := fmt.Sprintf("INSERT INTO %s (timestamp, payload) VALUES ", top)
-	dat := &strings.Builder{}
-
-	dat.WriteString(tpl)
-
-	return &series{
-		Cap: cap,
-    tpl: tpl,
-		dat: dat,
-	}
-}
-
-func (s *series) append(qry string) (string, bool) {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-
-	if s.len != 0 {
-		s.dat.WriteRune(',')
-	}
-
-	s.dat.WriteString(qry)
-	s.len += 1
-
-	if s.len == s.Cap {
-		qry = s.dat.String()
-
-		s.dat.Reset()
-    s.dat.WriteString(s.tpl)
-		s.len = 0
-
-		return qry, true
-	} else {
-		return "", false
-	}
-}
-
 type service struct {
-	con *pgxpool.Pool
-	que sync.Map
+	store *store
 
 	hook.UnimplementedHookProviderServer
 }
@@ -147,6 +96,10 @@ func (*service) OnClientConnected(context.Context, *hook.ClientConnectedRequest)
 }
 
 func (s *service) OnClientDisconnected(_ context.Context, req *hook.ClientDisconnectedRequest) (*hook.EmptySuccess, error) {
+	for _, own := range s.store.own {
+		own.CompareAndSwap(req.Clientinfo.Clientid, "")
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
@@ -157,9 +110,21 @@ func (s *service) OnClientAuthenticate(_ context.Context, req *hook.ClientAuthen
 	}, nil
 }
 
-func (s *service) OnClientAuthorize(_ context.Context, req *hook.ClientAuthorizeRequest) (*hook.ValuedResponse, error) {
+func (s *service) OnClientAuthorize(ctx context.Context, req *hook.ClientAuthorizeRequest) (*hook.ValuedResponse, error) {
+	if req.Type == hook.ClientAuthorizeRequest_PUBLISH {
+    slog.Debug("authz", "top", req.Topic, "con", req.Clientinfo.Clientid)
+
+		if !s.store.authz(req.Topic, req.Clientinfo.Clientid) {
+			return &hook.ValuedResponse{
+				Type:  hook.ValuedResponse_STOP_AND_RETURN,
+				Value: &hook.ValuedResponse_BoolResult{BoolResult: false},
+			}, nil
+		}
+	}
+
 	return &hook.ValuedResponse{
-		Type: hook.ValuedResponse_CONTINUE,
+		Type:  hook.ValuedResponse_CONTINUE,
+		Value: &hook.ValuedResponse_BoolResult{BoolResult: true},
 	}, nil
 }
 
@@ -200,42 +165,45 @@ func (*service) OnSessionTerminated(context.Context, *hook.SessionTerminatedRequ
 }
 
 func (s *service) OnMessagePublish(ctx context.Context, req *hook.MessagePublishRequest) (*hook.ValuedResponse, error) {
-	que, _ := s.que.LoadOrStore(req.Message.Topic, newSeries(req.Message.Topic, 5))
-	qry, err := toQuery(req.Message.Payload)
+	rec, err := parse(req.Message.Payload)
 
 	if err != nil {
-		return nil, fmt.Errorf("pay: %v", err)
+		slog.Error("parse", "msg", req.Message, "err", err)
+		return nil, fmt.Errorf("parse: %v", err)
 	}
 
-	if qry, ok := que.(*series).append(qry); ok {
-    slog.Debug("store", "query", qry)
-		s.con.Exec(ctx, qry)
+	if err := s.store.save(ctx, req.Message.Topic, rec); err != nil {
+		slog.Error("save", "msg", req.Message, "err", err)
+		return nil, fmt.Errorf("save: %v", err)
 	}
 
 	return &hook.ValuedResponse{
 		Type:  hook.ValuedResponse_CONTINUE,
-		Value: &hook.ValuedResponse_BoolResult{BoolResult: true},
+		Value: &hook.ValuedResponse_Message{
+      Message: req.Message,
+    },
 	}, nil
 }
 
-func toQuery(pay []byte) (string, error) {
+func parse(pay []byte) (rec record, err error) {
 	json, err := fastjson.ParseBytes(pay)
 
 	if err != nil {
-		return "", fmt.Errorf("json: %v", err)
+		return rec, fmt.Errorf("json: %v", err)
 	}
 
 	obj, err := json.Object()
 
 	if err != nil {
-		return "", fmt.Errorf("pay: %v", err)
+		return rec, fmt.Errorf("json: %v", err)
 	}
 
-	time := obj.Get("timestamp").GetUint64()
-	obj.Del("timestamp")
-	data := obj.MarshalTo(make([]byte, 0, 60))
+	rec.stamp = obj.Get("stamp").GetUint()
+	obj.Del("stamp")
+	rec.payload = string(obj.MarshalTo(make([]byte, 0, 60)))
 
-	return fmt.Sprintf("(to_timestamp(%d/1000.0), '%s')", time, string(data)), nil
+	return rec, nil
+
 }
 
 func (*service) OnMessageDelivered(context.Context, *hook.MessageDeliveredRequest) (*hook.EmptySuccess, error) {

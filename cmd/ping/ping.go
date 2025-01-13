@@ -36,6 +36,6 @@ func main() {
     stamp := t.UnixMilli()
     val += 0.1
 
-    cli.Publish(top, 0, false, fmt.Sprintf("{\"timestamp\":%d,\"value\":%v}", stamp, math.Sin(float64(val))))
+    cli.Publish(top, 0, false, fmt.Sprintf("{\"stamp\":%d,\"value\":%v}", stamp, math.Sin(float64(val))))
   }
 }

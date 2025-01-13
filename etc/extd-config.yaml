@@ -26,3 +26,5 @@ extd:
     action: deny
     psql:
       name: postgres
+    buf:
+      qcap: 5
