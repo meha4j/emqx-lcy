@@ -9,32 +9,32 @@ import (
 	"time"
 )
 
-type server struct {
+type Server struct {
 	Bind string `json:"bind"`
 }
 
-type handler struct {
+type Handler struct {
 	Addr string `json:"address"`
 }
 
-type listener struct {
+type Listener struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Bind string `json:"bind"`
 }
 
-type gateUpdateRequest struct {
+type GateUpdateRequest struct {
 	Name       string     `json:"name"`
 	Timeout    string     `json:"idle_timeout"`
 	Mountpoint string     `json:"mountpoint"`
 	Enable     bool       `json:"enable"`
 	Statistics bool       `json:"enable_stats"`
-	Server     server     `json:"server"`
-	Handler    handler    `json:"handler"`
-	Listeners  []listener `json:"listeners"`
+	Server     Server     `json:"server"`
+	Handler    Handler    `json:"handler"`
+	Listeners  []Listener `json:"listeners"`
 }
 
-type hookUpdateRequest struct {
+type HookUpdateRequest struct {
 	Name      string `json:"name"`
 	Enable    bool   `json:"enable"`
 	Addr      string `json:"url"`
@@ -153,7 +153,7 @@ func NewClient(base string, opts ...Option) (*Client, error) {
 	return cli, nil
 }
 
-func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
+func (c *Client) do(req *http.Request) (res *http.Response, err error) {
 	if c.user != "" {
 		req.SetBasicAuth(c.user, c.pass)
 	}
@@ -172,25 +172,8 @@ func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
 	return
 }
 
-func (c *Client) UpdateGate() error {
-	pay, err := json.Marshal(gateUpdateRequest{
-		Name:    "exproto",
-		Enable:  false,
-		Timeout: "15s",
-		Server: server{
-			Bind: "9100",
-		},
-		Handler: handler{
-			Addr: c.Addr,
-		},
-		Listeners: []listener{
-			{
-				Name: "default",
-				Type: "tcp",
-				Bind: "20041",
-			},
-		},
-	})
+func (c *Client) UpdateGate(r *GateUpdateRequest) error {
+	pay, err := json.Marshal(r)
 
 	if err != nil {
 		return fmt.Errorf("pay: %v", err)
@@ -204,7 +187,7 @@ func (c *Client) UpdateGate() error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.Do(req)
+	res, err := c.do(req)
 
 	if err != nil {
 		return fmt.Errorf("req: %v", err)
@@ -227,21 +210,14 @@ func (c *Client) UpdateGate() error {
 	return nil
 }
 
-func (c *Client) UpdateHook() error {
-	ok, err := c.checkHook()
+func (c *Client) UpdateHook(r *HookUpdateRequest) error {
+	ok, err := c.checkHook(r.Name)
 
 	if err != nil {
 		return fmt.Errorf("check: %v", err)
 	}
 
-	pay, err := json.Marshal(hookUpdateRequest{
-		Name:      "extd",
-		Addr:      c.Addr,
-		Enable:    false,
-		Action:    "deny",
-		Timeout:   "60s",
-		Reconnect: "15s",
-	})
+	pay, err := json.Marshal(r)
 
 	if err != nil {
 		return fmt.Errorf("pay: %v", err)
@@ -262,7 +238,7 @@ func (c *Client) UpdateHook() error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.Do(req)
+	res, err := c.do(req)
 
 	if err != nil {
 		return fmt.Errorf("req: %v", err)
@@ -285,15 +261,15 @@ func (c *Client) UpdateHook() error {
 	return nil
 }
 
-func (c *Client) checkHook() (bool, error) {
-	url := c.Base + "/exhooks/extd"
+func (c *Client) checkHook(name string) (bool, error) {
+	url := c.Base + "/exhooks/" + name
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 
 	if err != nil {
 		return false, fmt.Errorf("req: %v", err)
 	}
 
-	res, err := c.Do(req)
+	res, err := c.do(req)
 
 	if err != nil {
 		return false, fmt.Errorf("req: %v", err)
