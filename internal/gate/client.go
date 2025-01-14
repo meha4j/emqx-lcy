@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paraskun/extd/internal/api/gate"
-	"github.com/paraskun/extd/vcas"
+	"github.com/blabtm/extd/internal/api/gate"
+	"github.com/blabtm/extd/vcas"
 )
 
 type packet struct {

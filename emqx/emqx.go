@@ -5,37 +5,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"time"
 )
 
-type Server struct {
+type server struct {
 	Bind string `json:"bind"`
 }
 
-type Handler struct {
+type handler struct {
 	Addr string `json:"address"`
 }
 
-type Listener struct {
+type listener struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Bind string `json:"bind"`
 }
 
-type ExProtoGatewayUpdateRequest struct {
+type gateUpdateRequest struct {
 	Name       string     `json:"name"`
 	Timeout    string     `json:"idle_timeout"`
 	Mountpoint string     `json:"mountpoint"`
 	Enable     bool       `json:"enable"`
 	Statistics bool       `json:"enable_stats"`
-	Server     Server     `json:"server"`
-	Handler    Handler    `json:"handler"`
-	Listeners  []Listener `json:"listeners"`
+	Server     server     `json:"server"`
+	Handler    handler    `json:"handler"`
+	Listeners  []listener `json:"listeners"`
 }
 
-type ExHookServerUpdateRequest struct {
+type hookUpdateRequest struct {
 	Name      string `json:"name"`
 	Enable    bool   `json:"enable"`
 	Addr      string `json:"url"`
@@ -127,6 +126,8 @@ func NewClient(base string, opts ...Option) (*Client, error) {
 
 	if opt.addr != nil {
 		cli.Addr = *opt.addr
+	} else {
+		cli.Addr = "localhost"
 	}
 
 	if opt.user != nil {
@@ -139,33 +140,23 @@ func NewClient(base string, opts ...Option) (*Client, error) {
 
 	if opt.tout != nil {
 		cli.tout = *opt.tout
+	} else {
+		cli.tout = 15 * time.Second
 	}
 
 	if opt.rmax != nil {
 		cli.rmax = *opt.rmax
+	} else {
+		cli.rmax = 5
 	}
 
 	return cli, nil
 }
 
-func (c *Client) LookupAddress(host string) error {
-	addr, err := net.LookupIP(host)
-
-	if err != nil {
-		return fmt.Errorf("net: %v", err)
-	}
-
-	if len(addr) == 0 {
-		return fmt.Errorf("no record")
-	}
-
-	c.Addr = addr[0].String()
-
-	return nil
-}
-
 func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
-	req.SetBasicAuth(c.user, c.pass)
+	if c.user != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
 
 	for r := 1; r <= c.rmax+1; r++ {
 		res, err = c.conn.Do(req)
@@ -174,22 +165,39 @@ func (c *Client) Do(req *http.Request) (res *http.Response, err error) {
 			break
 		}
 
-		slog.Error("request failed", "att", r, "rmax", c.rmax+1, "err", err)
+		slog.Error("req", "att", r, "rmax", c.rmax+1, "err", err)
 		time.Sleep(c.tout)
 	}
 
 	return
 }
 
-func (c *Client) UpdateExProtoGateway(pay *ExProtoGatewayUpdateRequest) error {
-	bin, err := json.Marshal(pay)
+func (c *Client) UpdateGate() error {
+	pay, err := json.Marshal(gateUpdateRequest{
+		Name:    "exproto",
+		Enable:  false,
+		Timeout: "15s",
+		Server: server{
+			Bind: "9100",
+		},
+		Handler: handler{
+			Addr: c.Addr,
+		},
+		Listeners: []listener{
+			{
+				Name: "default",
+				Type: "tcp",
+				Bind: "20041",
+			},
+		},
+	})
 
 	if err != nil {
 		return fmt.Errorf("pay: %v", err)
 	}
 
 	url := c.Base + "/gateways/exproto"
-	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(bin))
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(pay))
 
 	if err != nil {
 		return fmt.Errorf("req: %v", err)
@@ -219,14 +227,21 @@ func (c *Client) UpdateExProtoGateway(pay *ExProtoGatewayUpdateRequest) error {
 	return nil
 }
 
-func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
-	ok, err := c.CheckExHookServer(pay.Name)
+func (c *Client) UpdateHook() error {
+	ok, err := c.checkHook()
 
 	if err != nil {
 		return fmt.Errorf("check: %v", err)
 	}
 
-	bin, err := json.Marshal(pay)
+	pay, err := json.Marshal(hookUpdateRequest{
+		Name:      "extd",
+		Addr:      c.Addr,
+		Enable:    false,
+		Action:    "deny",
+		Timeout:   "60s",
+		Reconnect: "15s",
+	})
 
 	if err != nil {
 		return fmt.Errorf("pay: %v", err)
@@ -236,11 +251,11 @@ func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
 	mod := http.MethodPost
 
 	if ok {
-		url += "/" + pay.Name
+		url += "/extd"
 		mod = http.MethodPut
 	}
 
-	req, err := http.NewRequest(mod, url, bytes.NewReader(bin))
+	req, err := http.NewRequest(mod, url, bytes.NewReader(pay))
 
 	if err != nil {
 		return fmt.Errorf("req: %v", err)
@@ -270,8 +285,8 @@ func (c *Client) UpdateExHookServer(pay *ExHookServerUpdateRequest) error {
 	return nil
 }
 
-func (c *Client) CheckExHookServer(name string) (bool, error) {
-	url := c.Base + "/exhooks/" + name
+func (c *Client) checkHook() (bool, error) {
+	url := c.Base + "/exhooks/extd"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 
 	if err != nil {

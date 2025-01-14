@@ -7,11 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"time"
 
-	"github.com/paraskun/extd/emqx"
-	"github.com/paraskun/extd/internal/gate"
-	"github.com/paraskun/extd/internal/hook"
+	"github.com/blabtm/extd/emqx"
+	"github.com/blabtm/extd/internal/gate"
+	"github.com/blabtm/extd/internal/hook"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 )
@@ -62,26 +61,35 @@ func start(opts ...option) error {
 		return fmt.Errorf("cfg: %v", err)
 	}
 
-	slog.Info("starting server. configuration:")
-	cfg.DebugTo(log.Writer())
-
-	host := cfg.GetString("extd.emqx.host")
-	port := cfg.GetInt("extd.emqx.port")
-	base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
-
-	cli, err := emqx.NewClient(base,
-		emqx.WithUser(cfg.GetString("extd.emqx.user")),
-		emqx.WithPass(cfg.GetString("extd.emqx.pass")),
-		emqx.WithRetries(cfg.GetInt("extd.emqx.rmax")),
-		emqx.WithTimeout(cfg.GetString("extd.emqx.tout")),
-	)
+	var cli *emqx.Client = nil
+	addr, err := net.LookupAddr(cfg.GetString("extd.lookup.name"))
 
 	if err != nil {
-		return fmt.Errorf("emqx: %v", err)
+		return fmt.Errorf("addr lookup: %v", err)
 	}
 
-	if err := cli.LookupAddress("extd"); err != nil {
-		return fmt.Errorf("lookup address: %v", err)
+	if len(addr) == 0 {
+		return fmt.Errorf("addr lookup: no record", err)
+	}
+
+  slog.Info("starting extd instance", "lookup", addr[0])
+
+	if cfg.GetBool("extd.emqx.auto") {
+		host := cfg.GetString("extd.emqx.host")
+		port := cfg.GetInt("extd.emqx.port")
+		base := fmt.Sprintf("http://%s:%d/api/v5", host, port)
+
+		cli, err = emqx.NewClient(base,
+			emqx.WithUser(cfg.GetString("extd.emqx.user")),
+			emqx.WithPass(cfg.GetString("extd.emqx.pass")),
+			emqx.WithRetries(cfg.GetInt("extd.emqx.rmax")),
+			emqx.WithTimeout(cfg.GetString("extd.emqx.tout")),
+			emqx.WithAddr(fmt.Sprintf("http://%s:%d", addr[0], cfg.GetInt("extd.port"))),
+		)
+
+		if err != nil {
+			return fmt.Errorf("emqx: cli: %v", err)
+		}
 	}
 
 	srv := grpc.NewServer()
@@ -94,7 +102,8 @@ func start(opts ...option) error {
 		return fmt.Errorf("hook: %v", err)
 	}
 
-	net, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GetInt("extd.port")))
+  port := cfg.GetInt("extd.port")
+	net, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 
 	if err != nil {
 		return fmt.Errorf("net: %v", err)
@@ -108,28 +117,16 @@ func start(opts ...option) error {
 func configure(opts []option) (*viper.Viper, error) {
 	cfg := viper.New()
 
-	cfg.SetDefault("extd.tz", time.Local.String())
-	cfg.SetDefault("extd.port", 9111)
+	cfg.SetDefault("extd.port", 9001)
+  cfg.SetDefault("extd.emqx.auto", true)
 	cfg.SetDefault("extd.emqx.host", "emqx")
 	cfg.SetDefault("extd.emqx.port", 18083)
 	cfg.SetDefault("extd.emqx.rmax", 5)
 	cfg.SetDefault("extd.emqx.tout", "15s")
 	cfg.SetDefault("extd.pgsql.host", "pgsql")
 	cfg.SetDefault("extd.pgsql.port", 5432)
-	cfg.SetDefault("extd.gate.server.port", 9110)
-	cfg.SetDefault("extd.gate.name", "exproto")
-	cfg.SetDefault("extd.gate.tout", "30s")
-	cfg.SetDefault("extd.gate.enable", false)
-	cfg.SetDefault("extd.gate.listener.name", "default")
-	cfg.SetDefault("extd.gate.listener.type", "tcp")
-	cfg.SetDefault("extd.gate.listener.port", 20041)
-	cfg.SetDefault("extd.hook.name", "extd")
-	cfg.SetDefault("extd.hook.tout", "30s")
-	cfg.SetDefault("extd.hook.trec", "60s")
-	cfg.SetDefault("extd.hook.enable", false)
-	cfg.SetDefault("extd.hook.action", "deny")
+	cfg.SetDefault("extd.gate.adapter.port", 9100)
 	cfg.SetDefault("extd.hook.pgsql.name", "postgres")
-  cfg.SetDefault("extd.hook.buf.cap", 5)
 
 	var options options
 

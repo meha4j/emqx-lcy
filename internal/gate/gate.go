@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"sync"
 
-	"github.com/paraskun/extd/internal/api/gate"
-	"github.com/paraskun/extd/vcas"
+	"github.com/blabtm/extd/internal/api/gate"
+	"github.com/blabtm/extd/vcas"
 
-	"github.com/paraskun/extd/emqx"
+	"github.com/blabtm/extd/emqx"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -41,24 +40,7 @@ func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
 	}
 
 	if opt.cli != nil {
-		if err := opt.cli.UpdateExProtoGateway(&emqx.ExProtoGatewayUpdateRequest{
-			Name:    cfg.GetString("extd.gate.name"),
-			Enable:  cfg.GetBool("extd.gate.enable"),
-			Timeout: cfg.GetString("extd.gate.tout"),
-			Server: emqx.Server{
-				Bind: strconv.Itoa(cfg.GetInt("extd.gate.server.port")),
-			},
-			Handler: emqx.Handler{
-				Addr: fmt.Sprintf("http://%s:%d", opt.cli.Addr, cfg.GetInt("extd.port")),
-			},
-			Listeners: []emqx.Listener{
-				{
-					Name: cfg.GetString("extd.gate.listener.name"),
-					Type: cfg.GetString("extd.gate.listener.type"),
-					Bind: strconv.Itoa(cfg.GetInt("extd.gate.listener.port")),
-				},
-			},
-		}); err != nil {
+		if err := opt.cli.UpdateGate(); err != nil {
 			return fmt.Errorf("upd: %v", err)
 		}
 	}
@@ -66,7 +48,7 @@ func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
 	crd := grpc.WithTransportCredentials(insecure.NewCredentials())
 	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
 		cfg.GetString("extd.emqx.host"),
-		cfg.GetInt("extd.gate.server.port"),
+		cfg.GetInt("extd.gate.adapter.port"),
 	), crd)
 
 	if err != nil {
@@ -89,6 +71,8 @@ type service struct {
 }
 
 func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRequest) (*gate.EmptySuccess, error) {
+	slog.Debug("gate: created", "con", req.Conninfo.String())
+
 	res, err := s.cli.Authenticate(ctx, &gate.AuthenticateRequest{
 		Conn: req.Conn,
 		Clientinfo: &gate.ClientInfo{
@@ -100,14 +84,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 	})
 
 	if err != nil {
-		slog.Error("auth", "conn", req.Conninfo.String(), "err", err)
+		slog.Error("gate: authn", "con", req.Conninfo.String(), "err", err)
 		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	if res.Code != gate.ResultCode_SUCCESS {
-		slog.Error("auth", "conn", req.Conninfo.String(), "code", res.Code)
+		slog.Error("gate: authn", "con", req.Conninfo.String(), "code", res.Code)
 		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.Message)
@@ -119,12 +103,15 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *gate.SocketClosedRequest) (*gate.EmptySuccess, error) {
+	slog.Debug("gate: closed", "con", req.Conn)
 	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
 func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRequest) (*gate.EmptySuccess, error) {
+	slog.Debug("gate: bytes", "con", req.Conn, "pay", string(req.Bytes))
+
 	v, ok := s.dat.Load(req.Conn)
 
 	if !ok {
@@ -132,7 +119,7 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRe
 	}
 
 	if err := v.(*Client).OnReceivedBytes(ctx, req.Bytes); err != nil {
-		slog.Error("bytes", "content", string(req.Bytes), "err", err)
+		slog.Error("gate: bytes", "con", req.Conn, "pay", string(req.Bytes), "err", err)
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
 
@@ -151,8 +138,10 @@ func (s *service) OnReceivedMessages(ctx context.Context, req *gate.ReceivedMess
 	}
 
 	for _, msg := range req.Messages {
+		slog.Debug("gate: msg", "con", req.Conn, "pay", msg)
+
 		if err := c.(*Client).OnReceivedMessage(ctx, msg); err != nil {
-			slog.Error("message", "content", msg, "err", err)
+			slog.Error("gate: msg", "con", req.Conn, "pay", msg, "err", err)
 			return nil, status.Error(codes.Unknown, err.Error())
 		}
 	}

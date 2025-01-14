@@ -6,16 +6,18 @@ import (
 	"log/slog"
 
 	"github.com/spf13/viper"
-	"github.com/valyala/fastjson"
 
 	"google.golang.org/grpc"
 
-	"github.com/paraskun/extd/emqx"
-	"github.com/paraskun/extd/internal/api/hook"
+	"github.com/blabtm/extd/emqx"
+	"github.com/blabtm/extd/internal/api/hook"
 )
 
+type Hook = hook.HookProviderServer
+
 type options struct {
-	cli *emqx.Client
+	hooks []Hook
+	cli   *emqx.Client
 }
 
 type Option func(opts *options) error
@@ -23,6 +25,13 @@ type Option func(opts *options) error
 func WithClient(cli *emqx.Client) Option {
 	return func(opts *options) error {
 		opts.cli = cli
+		return nil
+	}
+}
+
+func WithHook(hook Hook) Option {
+	return func(opts *options) error {
+		opts.hooks = append(opts.hooks, hook)
 		return nil
 	}
 }
@@ -37,73 +46,115 @@ func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
 	}
 
 	if opt.cli != nil {
-		if err := opt.cli.UpdateExHookServer(&emqx.ExHookServerUpdateRequest{
-			Name:      cfg.GetString("extd.hook.name"),
-			Enable:    cfg.GetBool("extd.hook.enable"),
-			Action:    cfg.GetString("extd.hook.action"),
-			Timeout:   cfg.GetString("extd.hook.tout"),
-			Reconnect: cfg.GetString("extd.hook.trec"),
-			Addr:      fmt.Sprintf("http://%s:%d", opt.cli.Addr, cfg.GetInt("extd.port")),
-		}); err != nil {
+		if err := opt.cli.UpdateHook(); err != nil {
 			return fmt.Errorf("upd: %v", err)
 		}
 	}
 
-	store, err := newStore(
-		context.Background(),
-		"postgres://postgres:pass@psql:5432/postgres",
-		cfg.GetUint("extd.hook.buf.qcap"),
-	)
-
-	if err != nil {
-		return fmt.Errorf("store: %v", err)
-	}
-
-	hook.RegisterHookProviderServer(srv, &service{store: store})
+	hook.RegisterHookProviderServer(srv, &service{hooks: opt.hooks})
 
 	return nil
 }
 
 type service struct {
-	store *store
+	hooks []Hook
 
 	hook.UnimplementedHookProviderServer
 }
 
-func (s *service) OnProviderLoaded(ctx context.Context, _ *hook.ProviderLoadedRequest) (*hook.LoadedResponse, error) {
-	return &hook.LoadedResponse{
-		Hooks: []*hook.HookSpec{
-			{Name: "client.authorize"},
-			{Name: "message.publish"},
-		},
-	}, nil
+func (s *service) OnProviderLoaded(ctx context.Context, req *hook.ProviderLoadedRequest) (*hook.LoadedResponse, error) {
+	slog.Debug("hook: provider: loaded", "req", req)
+
+	spec := make([]*hook.HookSpec, 0, len(s.hooks))
+
+	for _, hook := range s.hooks {
+		res, err := hook.OnProviderLoaded(ctx, req)
+
+		if err != nil {
+			return nil, err
+		}
+
+		spec = append(spec, res.Hooks...)
+	}
+
+	return &hook.LoadedResponse{Hooks: spec}, nil
 }
 
-func (s *service) OnProviderUnloaded(context.Context, *hook.ProviderUnloadedRequest) (*hook.EmptySuccess, error) {
-	return &hook.EmptySuccess{}, nil
-}
+func (s *service) OnProviderUnloaded(ctx context.Context, req *hook.ProviderUnloadedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: provier: unloaded", "req", req)
 
-func (*service) OnClientConnect(context.Context, *hook.ClientConnectRequest) (*hook.EmptySuccess, error) {
-	return &hook.EmptySuccess{}, nil
-}
-
-func (*service) OnClientConnack(context.Context, *hook.ClientConnackRequest) (*hook.EmptySuccess, error) {
-	return &hook.EmptySuccess{}, nil
-}
-
-func (*service) OnClientConnected(context.Context, *hook.ClientConnectedRequest) (*hook.EmptySuccess, error) {
-	return &hook.EmptySuccess{}, nil
-}
-
-func (s *service) OnClientDisconnected(_ context.Context, req *hook.ClientDisconnectedRequest) (*hook.EmptySuccess, error) {
-	for _, own := range s.store.own {
-		own.CompareAndSwap(req.Clientinfo.Clientid, "")
+	for _, h := range s.hooks {
+		if _, err := h.OnProviderUnloaded(ctx, req); err != nil {
+			return nil, err
+		}
 	}
 
 	return &hook.EmptySuccess{}, nil
 }
 
-func (s *service) OnClientAuthenticate(_ context.Context, req *hook.ClientAuthenticateRequest) (*hook.ValuedResponse, error) {
+func (s *service) OnClientConnect(ctx context.Context, req *hook.ClientConnectRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: client: connect", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnClientConnect(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
+	return &hook.EmptySuccess{}, nil
+}
+
+func (s *service) OnClientConnack(ctx context.Context, req *hook.ClientConnackRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: client: connack", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnClientConnack(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
+	return &hook.EmptySuccess{}, nil
+}
+
+func (s *service) OnClientConnected(ctx context.Context, req *hook.ClientConnectedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: client: connected", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnClientConnected(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
+	return &hook.EmptySuccess{}, nil
+}
+
+func (s *service) OnClientDisconnected(ctx context.Context, req *hook.ClientDisconnectedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: client: disconnected", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnClientDisconnected(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
+	return &hook.EmptySuccess{}, nil
+}
+
+func (s *service) OnClientAuthenticate(ctx context.Context, req *hook.ClientAuthenticateRequest) (*hook.ValuedResponse, error) {
+	slog.Debug("hook: client: authn", "req", req)
+
+	for _, h := range s.hooks {
+		res, err := h.OnClientAuthenticate(ctx, req)
+
+		if err != nil {
+			return nil, err
+		}
+
+		if res.Type == hook.ValuedResponse_STOP_AND_RETURN {
+			return res, nil
+		}
+	}
+
 	return &hook.ValuedResponse{
 		Type:  hook.ValuedResponse_CONTINUE,
 		Value: &hook.ValuedResponse_BoolResult{BoolResult: true},
@@ -111,14 +162,17 @@ func (s *service) OnClientAuthenticate(_ context.Context, req *hook.ClientAuthen
 }
 
 func (s *service) OnClientAuthorize(ctx context.Context, req *hook.ClientAuthorizeRequest) (*hook.ValuedResponse, error) {
-	if req.Type == hook.ClientAuthorizeRequest_PUBLISH {
-    slog.Debug("authz", "top", req.Topic, "con", req.Clientinfo.Clientid)
+	slog.Debug("hook: client: authz", "req", req)
 
-		if !s.store.authz(req.Topic, req.Clientinfo.Clientid) {
-			return &hook.ValuedResponse{
-				Type:  hook.ValuedResponse_STOP_AND_RETURN,
-				Value: &hook.ValuedResponse_BoolResult{BoolResult: false},
-			}, nil
+	for _, h := range s.hooks {
+		res, err := h.OnClientAuthorize(ctx, req)
+
+		if err != nil {
+			return nil, err
+		}
+
+		if res.Type == hook.ValuedResponse_STOP_AND_RETURN {
+			return res, nil
 		}
 	}
 
@@ -128,92 +182,167 @@ func (s *service) OnClientAuthorize(ctx context.Context, req *hook.ClientAuthori
 	}, nil
 }
 
-func (*service) OnClientSubscribe(context.Context, *hook.ClientSubscribeRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnClientSubscribe(ctx context.Context, req *hook.ClientSubscribeRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: client: sub", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnClientSubscribe(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnClientUnsubscribe(context.Context, *hook.ClientUnsubscribeRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnClientUnsubscribe(ctx context.Context, req *hook.ClientUnsubscribeRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: client: usub", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnClientUnsubscribe(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionCreated(context.Context, *hook.SessionCreatedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionCreated(ctx context.Context, req *hook.SessionCreatedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: created", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionCreated(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionSubscribed(context.Context, *hook.SessionSubscribedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionSubscribed(ctx context.Context, req *hook.SessionSubscribedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: sub", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionSubscribed(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionUnsubscribed(context.Context, *hook.SessionUnsubscribedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionUnsubscribed(ctx context.Context, req *hook.SessionUnsubscribedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: usub", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionUnsubscribed(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionResumed(context.Context, *hook.SessionResumedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionResumed(ctx context.Context, req *hook.SessionResumedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: resumed", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionResumed(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionDiscarded(context.Context, *hook.SessionDiscardedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionDiscarded(ctx context.Context, req *hook.SessionDiscardedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: discarded", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionDiscarded(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionTakenover(context.Context, *hook.SessionTakenoverRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionTakenover(ctx context.Context, req *hook.SessionTakenoverRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: takenover", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionTakenover(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnSessionTerminated(context.Context, *hook.SessionTerminatedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnSessionTerminated(ctx context.Context, req *hook.SessionTerminatedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: session: terminated", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnSessionTerminated(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
 func (s *service) OnMessagePublish(ctx context.Context, req *hook.MessagePublishRequest) (*hook.ValuedResponse, error) {
-	rec, err := parse(req.Message.Payload)
+	slog.Debug("hook: message: pub", "req", req)
 
-	if err != nil {
-		slog.Error("parse", "msg", req.Message, "err", err)
-		return nil, fmt.Errorf("parse: %v", err)
-	}
+	for _, h := range s.hooks {
+		res, err := h.OnMessagePublish(ctx, req)
 
-	if err := s.store.save(ctx, req.Message.Topic, rec); err != nil {
-		slog.Error("save", "msg", req.Message, "err", err)
-		return nil, fmt.Errorf("save: %v", err)
+		if err != nil {
+			return nil, err
+		}
+
+		if res.Type == hook.ValuedResponse_STOP_AND_RETURN {
+			return res, nil
+		}
 	}
 
 	return &hook.ValuedResponse{
 		Type:  hook.ValuedResponse_CONTINUE,
-		Value: &hook.ValuedResponse_Message{
-      Message: req.Message,
-    },
+		Value: &hook.ValuedResponse_Message{Message: req.Message},
 	}, nil
 }
 
-func parse(pay []byte) (rec record, err error) {
-	json, err := fastjson.ParseBytes(pay)
+func (s *service) OnMessageDelivered(ctx context.Context, req *hook.MessageDeliveredRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: message: delivered", "req", req)
 
-	if err != nil {
-		return rec, fmt.Errorf("json: %v", err)
+	for _, h := range s.hooks {
+		if _, err := h.OnMessageDelivered(ctx, req); err != nil {
+			return nil, err
+		}
 	}
 
-	obj, err := json.Object()
-
-	if err != nil {
-		return rec, fmt.Errorf("json: %v", err)
-	}
-
-	rec.stamp = obj.Get("stamp").GetUint()
-	obj.Del("stamp")
-	rec.payload = string(obj.MarshalTo(make([]byte, 0, 60)))
-
-	return rec, nil
-
-}
-
-func (*service) OnMessageDelivered(context.Context, *hook.MessageDeliveredRequest) (*hook.EmptySuccess, error) {
 	return &hook.EmptySuccess{}, nil
 }
 
-func (*service) OnMessageDropped(context.Context, *hook.MessageDroppedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnMessageDropped(ctx context.Context, req *hook.MessageDroppedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: message: dropped", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnMessageDropped(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
 
-func (s *service) OnMessageAcked(_ context.Context, req *hook.MessageAckedRequest) (*hook.EmptySuccess, error) {
+func (s *service) OnMessageAcked(ctx context.Context, req *hook.MessageAckedRequest) (*hook.EmptySuccess, error) {
+	slog.Debug("hook: message: acked", "req", req)
+
+	for _, h := range s.hooks {
+		if _, err := h.OnMessageAcked(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
 	return &hook.EmptySuccess{}, nil
 }
