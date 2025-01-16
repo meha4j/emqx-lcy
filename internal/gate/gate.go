@@ -6,10 +6,9 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/blabtm/extd/internal/api/gate"
-	"github.com/blabtm/extd/vcas"
+	api "github.com/blabtm/extd/internal/api/gate"
 
-	"github.com/blabtm/extd/emqx"
+	"github.com/blabtm/extd/vcas"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,65 +16,38 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type options struct {
-	cli *emqx.Client
-}
-
-type Option func(opts *options) error
-
-func WithClient(cli *emqx.Client) Option {
-	return func(opts *options) error {
-		opts.cli = cli
-		return nil
-	}
-}
-
-func Register(srv *grpc.Server, cfg *viper.Viper, opts ...Option) error {
-	var opt options
-
-	for _, exe := range opts {
-		if err := exe(&opt); err != nil {
-			return fmt.Errorf("opt: %v", err)
-		}
-	}
-
-	if opt.cli != nil {
-		if err := opt.cli.UpdateGate(); err != nil {
-			return fmt.Errorf("upd: %v", err)
-		}
-	}
-
+func Register(srv *grpc.Server, cfg *viper.Viper) error {
 	crd := grpc.WithTransportCredentials(insecure.NewCredentials())
 	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
 		cfg.GetString("extd.emqx.host"),
-		cfg.GetInt("extd.gate.adapter.port"),
+		cfg.GetInt("extd.gate.server.port"),
 	), crd)
 
 	if err != nil {
 		return fmt.Errorf("cli: %v", err)
 	}
 
-	cli := gate.NewConnectionAdapterClient(con)
+	cli := api.NewConnectionAdapterClient(con)
 	svc := &service{cli: cli}
 
-	gate.RegisterConnectionUnaryHandlerServer(srv, svc)
+	api.RegisterConnectionUnaryHandlerServer(srv, svc)
 
 	return nil
 }
 
 type service struct {
 	dat sync.Map
-	cli gate.ConnectionAdapterClient
+	cli api.ConnectionAdapterClient
 
-	gate.UnimplementedConnectionUnaryHandlerServer
+	api.UnimplementedConnectionUnaryHandlerServer
 }
 
-func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedRequest) (*api.EmptySuccess, error) {
 	slog.Debug("gate: created", "con", req.Conninfo.String())
 
-	res, err := s.cli.Authenticate(ctx, &gate.AuthenticateRequest{
+	res, err := s.cli.Authenticate(ctx, &api.AuthenticateRequest{
 		Conn: req.Conn,
-		Clientinfo: &gate.ClientInfo{
+		Clientinfo: &api.ClientInfo{
 			ProtoName: vcas.Name,
 			ProtoVer:  vcas.Version,
 			Clientid:  req.Conn,
@@ -85,14 +57,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 
 	if err != nil {
 		slog.Error("gate: authn", "con", req.Conninfo.String(), "err", err)
-		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if res.Code != gate.ResultCode_SUCCESS {
+	if res.Code != api.ResultCode_SUCCESS {
 		slog.Error("gate: authn", "con", req.Conninfo.String(), "code", res.Code)
-		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.Message)
 	}
@@ -102,14 +74,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 	return nil, nil
 }
 
-func (s *service) OnSocketClosed(_ context.Context, req *gate.SocketClosedRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnSocketClosed(_ context.Context, req *api.SocketClosedRequest) (*api.EmptySuccess, error) {
 	slog.Debug("gate: closed", "con", req.Conn)
 	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
-func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesRequest) (*api.EmptySuccess, error) {
 	slog.Debug("gate: bytes", "con", req.Conn, "pay", string(req.Bytes))
 
 	v, ok := s.dat.Load(req.Conn)
@@ -126,11 +98,11 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRe
 	return nil, nil
 }
 
-func (s *service) OnTimerTimeout(ctx context.Context, req *gate.TimerTimeoutRequest) (*gate.EmptySuccess, error) {
-	return nil, nil
+func (s *service) OnTimerTimeout(ctx context.Context, req *api.TimerTimeoutRequest) (*api.EmptySuccess, error) {
+	return &api.EmptySuccess{}, nil
 }
 
-func (s *service) OnReceivedMessages(ctx context.Context, req *gate.ReceivedMessagesRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnReceivedMessages(ctx context.Context, req *api.ReceivedMessagesRequest) (*api.EmptySuccess, error) {
 	c, ok := s.dat.Load(req.Conn)
 
 	if !ok {

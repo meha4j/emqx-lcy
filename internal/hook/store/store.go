@@ -10,6 +10,7 @@ import (
 	"github.com/blabtm/extd/internal/hook"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/valyala/fastjson"
 
 	api "github.com/blabtm/extd/internal/api/hook"
 )
@@ -73,7 +74,13 @@ func (s *store) OnMessagePublish(ctx context.Context, req *api.MessagePublishReq
 	buf, ok := s.ret.Load(req.Message.Topic)
 
 	if ok {
-		if query, ok := buf.(*queryBuffer).Append(nil); ok {
+		rec, err := parseRecord(req)
+
+		if err != nil {
+			return nil, fmt.Errorf("parse: %v", err)
+		}
+
+		if query, ok := buf.(*queryBuffer).Append(rec); ok {
 			if _, err := s.con.Exec(ctx, query); err != nil {
 				return nil, fmt.Errorf("db: exec: %v", err)
 			}
@@ -84,6 +91,24 @@ func (s *store) OnMessagePublish(ctx context.Context, req *api.MessagePublishReq
 		Type:  api.ValuedResponse_CONTINUE,
 		Value: &api.ValuedResponse_Message{Message: req.Message},
 	}, nil
+}
+
+func parseRecord(req *api.MessagePublishRequest) (*record, error) {
+	pay, err := fastjson.ParseBytes(req.Message.Payload)
+
+	if err != nil {
+		return nil, fmt.Errorf("json: %v", err)
+	}
+
+	obj := pay.GetObject()
+
+	var r record
+
+	r.Stamp = obj.Get("stamp").GetUint64()
+	obj.Del("stamp")
+	r.Payload = obj.MarshalTo(r.Payload)
+
+	return &r, nil
 }
 
 type record struct {
