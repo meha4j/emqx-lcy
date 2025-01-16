@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
@@ -22,6 +23,9 @@ func init() {
 }
 
 func main() {
+  flag.Parse()
+  slog.Info("pining", "addr", dst, "top", top, "freq", frq)
+
   cli := mqtt.NewClient(mqtt.NewClientOptions().AddBroker(dst))
 
   if tok := cli.Connect(); tok.Wait() && tok.Error() != nil {

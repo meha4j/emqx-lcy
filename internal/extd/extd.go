@@ -1,6 +1,7 @@
 package extd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,8 +10,8 @@ import (
 	"github.com/blabtm/extd/emqx"
 	"github.com/blabtm/extd/internal/gate"
 	"github.com/blabtm/extd/internal/hook"
-	"github.com/blabtm/extd/internal/hook/authz"
 	"github.com/blabtm/extd/internal/hook/store"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 )
@@ -78,9 +79,14 @@ func Start(opts ...Option) error {
 		return fmt.Errorf("gate: %v", err)
 	}
 
+  pdb, err := newPool(cfg)
+
+  if err != nil {
+    return fmt.Errorf("pdb: %v", err)
+  }
+
 	if err := hook.Register(srv, cfg,
-		hook.Use(authz.New(nil)),
-		hook.Use(store.New(nil)),
+		hook.Use(store.New(pdb)),
 	); err != nil {
 		return fmt.Errorf("hook: %v", err)
 	}
@@ -100,14 +106,14 @@ func configure(opts []Option) (*viper.Viper, error) {
 	cfg := viper.New()
 
 	cfg.SetDefault("extd.port", 9001)
-	cfg.SetDefault("extd.lookup.name", "extd")
+	cfg.SetDefault("extd.lookup", "extd")
 	cfg.SetDefault("extd.emqx.auto", true)
 	cfg.SetDefault("extd.emqx.host", "emqx")
 	cfg.SetDefault("extd.emqx.port", 18083)
 	cfg.SetDefault("extd.emqx.rmax", 5)
 	cfg.SetDefault("extd.emqx.tout", "15s")
-	cfg.SetDefault("extd.pgsql.host", "pgsql")
-	cfg.SetDefault("extd.pgsql.port", 5432)
+	cfg.SetDefault("extd.psql.host", "pgsql")
+	cfg.SetDefault("extd.psql.port", 5432)
 	cfg.SetDefault("extd.gate.tout", "300s")
 	cfg.SetDefault("extd.gate.enable", false)
 	cfg.SetDefault("extd.gate.statistics", true)
@@ -115,7 +121,7 @@ func configure(opts []Option) (*viper.Viper, error) {
 	cfg.SetDefault("extd.gate.listener.name", "vcas")
 	cfg.SetDefault("extd.gate.listener.type", "tcp")
 	cfg.SetDefault("extd.gate.listener.port", 20041)
-	cfg.SetDefault("extd.hook.pgsql.name", "postgres")
+	cfg.SetDefault("extd.hook.psql.name", "postgres")
 	cfg.SetDefault("extd.hook.name", "extd")
 	cfg.SetDefault("extd.hook.enable", false)
 	cfg.SetDefault("extd.hook.tout", "15s")
@@ -147,17 +153,17 @@ func configure(opts []Option) (*viper.Viper, error) {
 		}
 	}
 
-	host, err := net.LookupAddr(cfg.GetString("extd.lookup.name"))
+	host, err := net.LookupIP(cfg.GetString("extd.lookup"))
 
 	if err != nil {
-		return nil, fmt.Errorf("lookup: net: %v", err)
+		return nil, fmt.Errorf("net: %v", err)
 	}
 
 	if len(host) == 0 {
 		return nil, fmt.Errorf("lookup: no record")
 	}
 
-	cfg.Set("extd.addr", fmt.Sprintf("http://%s:%d", host[0], cfg.GetInt("extd.port")))
+	cfg.Set("extd.addr", fmt.Sprintf("http://%s:%d", host[0].String(), cfg.GetInt("extd.port")))
 
 	return cfg, nil
 }
@@ -195,4 +201,16 @@ func newHookConfig(cfg *viper.Viper) *emqx.HookUpdateRequest {
 		Reconnect: cfg.GetString("extd.hook.rout"),
 		PoolSize:  cfg.GetInt("extd.hook.pool.size"),
 	}
+}
+
+func newPool(cfg *viper.Viper) (*pgxpool.Pool, error) {
+  addr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s", 
+    cfg.GetString("extd.psql.user"),
+    cfg.GetString("extd.psql.pass"),
+    cfg.GetString("extd.psql.host"),
+    cfg.GetInt("extd.psql.port"),
+    cfg.GetString("extd.psql.name"),
+  )
+
+  return pgxpool.New(context.Background(), addr)
 }
