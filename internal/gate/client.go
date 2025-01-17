@@ -11,35 +11,23 @@ import (
 	"github.com/blabtm/extd/vcas"
 )
 
-type packet struct {
-	Topic  string      `vcas:"name,n" json:"-"`
-	Stamp  vcas.Time   `vcas:"time,t" json:"stamp"`
-	Method vcas.Method `vcas:"method,meth,m" json:"-"`
-	Value  any         `vcas:"val,value,v" json:"value,omitempty"`
-	Units  any         `vcas:"units" json:"-"`
-	Descr  any         `vcas:"descr" json:"-"`
-	Type   any         `vcas:"type" json:"-"`
-}
-
 type Client struct {
 	Conn string
 
 	obs string
 	buf []byte
-	pkt packet
+	pkt vcas.Packet
 	mux sync.Mutex
 
 	cli gate.ConnectionAdapterClient
 }
 
 func NewClient(conn string, cli gate.ConnectionAdapterClient) *Client {
-	buf := make([]byte, 0, 0xff)
-
 	return &Client{
 		Conn: conn,
 
 		cli: cli,
-		buf: buf,
+		buf: make([]byte, 0, 0xff),
 	}
 }
 
@@ -54,14 +42,13 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 		}
 
 		c.pkt.Stamp.Time = time.Now()
-		c.pkt.Value = nil
 
-		if err := vcas.Unmarshal(c.buf, &c.pkt); err != nil {
-			return fmt.Errorf("unmarshal: %v", err)
+		if err := c.pkt.Unmarshal(c.buf); err != nil {
+			return fmt.Errorf("vcas: %v", err)
 		}
 
 		if err := c.handlePacket(ctx, &c.pkt); err != nil {
-			return fmt.Errorf("handle: %v", err)
+			return err
 		}
 
 		if cap(c.buf) > 0xff {
@@ -74,7 +61,7 @@ func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
+func (c *Client) handlePacket(ctx context.Context, pkt *vcas.Packet) error {
 	if c.obs != "" {
 		return nil
 	}
@@ -90,11 +77,11 @@ func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 		}
 	case vcas.SUB:
 		if err := c.subscribe(ctx, c.pkt.Topic); err != nil {
-			return fmt.Errorf("sube: %v", err)
+			return fmt.Errorf("sub: %v", err)
 		}
 	case vcas.USB:
 		if err := c.unsubscribe(ctx, c.pkt.Topic); err != nil {
-			return fmt.Errorf("usb: %v", err)
+			return fmt.Errorf("usub: %v", err)
 		}
 	case vcas.GET:
 		if err := c.get(ctx, c.pkt.Topic); err != nil {
@@ -107,7 +94,7 @@ func (c *Client) handlePacket(ctx context.Context, pkt *packet) error {
 	return nil
 }
 
-func (c *Client) publish(ctx context.Context, pkt *packet) error {
+func (c *Client) publish(ctx context.Context, pkt *vcas.Packet) error {
 	pay, err := json.Marshal(pkt)
 
 	if err != nil {
@@ -183,7 +170,7 @@ func (c *Client) get(ctx context.Context, top string) error {
 		if c.obs != "" {
 			c.pkt.Topic = c.obs
 			c.pkt.Stamp.Time = time.Now()
-			c.pkt.Value = nil
+			c.pkt.Value = ""
 
 			c.unsubscribe(context.Background(), c.obs)
 			c.send(context.Background(), &c.pkt)
@@ -212,7 +199,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error
 	}
 
 	c.pkt.Topic = msg.Topic
-	c.pkt.Value = nil
+  c.pkt.Value = ""
 
 	if err := json.Unmarshal(msg.Payload, &c.pkt); err != nil {
 		return fmt.Errorf("parse: %v", err)
@@ -225,9 +212,9 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error
 	return nil
 }
 
-func (c *Client) send(ctx context.Context, pkt *packet) error {
+func (c *Client) send(ctx context.Context, pkt *vcas.Packet) error {
 	pkt.Method = vcas.PUB
-	txt, err := vcas.Marshal(pkt)
+	pay, err := pkt.Marshal(make([]byte, 0))
 
 	if err != nil {
 		return fmt.Errorf("marshal: %v", err)
@@ -235,7 +222,7 @@ func (c *Client) send(ctx context.Context, pkt *packet) error {
 
 	res, err := c.cli.Send(ctx, &gate.SendBytesRequest{
 		Conn:  c.Conn,
-		Bytes: append(txt, 10),
+		Bytes: pay,
 	})
 
 	if err != nil {

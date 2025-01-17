@@ -17,12 +17,6 @@ type Handler struct {
 	Addr string `json:"address"`
 }
 
-type Listener struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Bind string `json:"bind"`
-}
-
 type GateUpdateRequest struct {
 	Name       string     `json:"name"`
 	Timeout    string     `json:"idle_timeout"`
@@ -31,7 +25,6 @@ type GateUpdateRequest struct {
 	Statistics bool       `json:"enable_stats"`
 	Server     Server     `json:"server"`
 	Handler    Handler    `json:"handler"`
-	Listeners  []Listener `json:"listeners"`
 }
 
 type HookUpdateRequest struct {
@@ -53,13 +46,6 @@ type options struct {
 }
 
 type Option func(*options) error
-
-func WithAddr(addr string) Option {
-	return func(o *options) error {
-		o.addr = &addr
-		return nil
-	}
-}
 
 func WithUser(user string) Option {
 	return func(o *options) error {
@@ -101,7 +87,6 @@ func WithRetries(rmax int) Option {
 
 type Client struct {
 	Base string
-	Addr string
 
 	conn *http.Client
 	user string
@@ -122,12 +107,6 @@ func NewClient(base string, opts ...Option) (*Client, error) {
 	cli := &Client{
 		Base: base,
 		conn: &http.Client{},
-	}
-
-	if opt.addr != nil {
-		cli.Addr = *opt.addr
-	} else {
-		cli.Addr = "localhost"
 	}
 
 	if opt.user != nil {
@@ -203,6 +182,8 @@ func (c *Client) UpdateGate(r *GateUpdateRequest) error {
 		if err != nil {
 			return fmt.Errorf("res: %v", err)
 		}
+
+    slog.Debug("req update failed", "req", string(pay))
 
 		return fmt.Errorf("%v", buf.String())
 	}

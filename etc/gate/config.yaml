@@ -1,0 +1,13 @@
+gate:
+  name: gate
+  port: 9001
+  emqx:
+    host: emqx
+    port: 18083
+    retry: 5
+    timeout: 5s
+    auto:
+      enable: true
+      timeout: 30s
+      adapter:
+        port: 9100

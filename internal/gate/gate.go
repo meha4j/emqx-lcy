@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/blabtm/extd/emqx"
 	api "github.com/blabtm/extd/internal/api/gate"
 
 	"github.com/blabtm/extd/vcas"
@@ -16,21 +17,54 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func Register(srv *grpc.Server, cfg *viper.Viper) error {
-	crd := grpc.WithTransportCredentials(insecure.NewCredentials())
+func Register(srv *grpc.Server, etc *viper.Viper) error {
+	if err := updateGate(etc); err != nil {
+		return fmt.Errorf("update: %v", err)
+	}
+
 	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
-		cfg.GetString("extd.emqx.host"),
-		cfg.GetInt("extd.gate.server.port"),
-	), crd)
+		etc.GetString("gate.emqx.host"),
+		etc.GetInt("gate.emqx.auto.adapter.port"),
+	), grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	if err != nil {
-		return fmt.Errorf("cli: %v", err)
+		return fmt.Errorf("grpc: %v", err)
 	}
 
 	cli := api.NewConnectionAdapterClient(con)
 	svc := &service{cli: cli}
 
 	api.RegisterConnectionUnaryHandlerServer(srv, svc)
+
+	return nil
+}
+
+func updateGate(etc *viper.Viper) error {
+	cli, err := emqx.NewClient(
+		fmt.Sprintf("http://%s:%d/api/v5", etc.GetString("gate.emqx.host"), etc.GetInt("gate.emqx.port")),
+		emqx.WithTimeout(etc.GetString("gate.emqx.timeout")),
+		emqx.WithRetries(etc.GetInt("gate.emqx.retry")),
+		emqx.WithUser(etc.GetString("gate.emqx.user")),
+		emqx.WithPass(etc.GetString("gate.emqx.pass")),
+	)
+
+	if err != nil {
+		return fmt.Errorf("emqx: %v", err)
+	}
+
+	if err := cli.UpdateGate(&emqx.GateUpdateRequest{
+		Name:    "exproto",
+		Enable:  etc.GetBool("gate.emqx.auto.enable"),
+		Timeout: etc.GetString("gate.emqx.auto.timeout"),
+		Server: emqx.Server{
+			Bind: etc.GetString("gate.emqx.auto.adapter.port"),
+		},
+		Handler: emqx.Handler{
+			Addr: "http://" + etc.GetString("gate.addr"),
+		},
+	}); err != nil {
+		return fmt.Errorf("emqx: %v", err)
+	}
 
 	return nil
 }
@@ -43,7 +77,7 @@ type service struct {
 }
 
 func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedRequest) (*api.EmptySuccess, error) {
-	slog.Debug("gate: created", "con", req.Conninfo.String())
+	slog.Debug("socket created", "con", req.Conninfo.String())
 
 	res, err := s.cli.Authenticate(ctx, &api.AuthenticateRequest{
 		Conn: req.Conn,
@@ -56,14 +90,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedReq
 	})
 
 	if err != nil {
-		slog.Error("gate: authn", "con", req.Conninfo.String(), "err", err)
+		slog.Error("authn", "con", req.Conninfo.String(), "err", err)
 		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	if res.Code != api.ResultCode_SUCCESS {
-		slog.Error("gate: authn", "con", req.Conninfo.String(), "code", res.Code)
+		slog.Error("authn", "con", req.Conninfo.String(), "code", res.Code)
 		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.Message)
@@ -75,14 +109,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedReq
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *api.SocketClosedRequest) (*api.EmptySuccess, error) {
-	slog.Debug("gate: closed", "con", req.Conn)
+	slog.Debug("socket closed", "con", req.Conn)
 	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
 func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesRequest) (*api.EmptySuccess, error) {
-	slog.Debug("gate: bytes", "con", req.Conn, "pay", string(req.Bytes))
+	slog.Debug("received bytes", "con", req.Conn, "pay", string(req.Bytes))
 
 	v, ok := s.dat.Load(req.Conn)
 
@@ -91,7 +125,7 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesReq
 	}
 
 	if err := v.(*Client).OnReceivedBytes(ctx, req.Bytes); err != nil {
-		slog.Error("gate: bytes", "con", req.Conn, "pay", string(req.Bytes), "err", err)
+		slog.Error("bytes", "con", req.Conn, "pay", string(req.Bytes), "err", err)
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
 
@@ -110,10 +144,10 @@ func (s *service) OnReceivedMessages(ctx context.Context, req *api.ReceivedMessa
 	}
 
 	for _, msg := range req.Messages {
-		slog.Debug("gate: msg", "con", req.Conn, "pay", msg)
+		slog.Debug("received message", "con", req.Conn, "pay", msg)
 
 		if err := c.(*Client).OnReceivedMessage(ctx, msg); err != nil {
-			slog.Error("gate: msg", "con", req.Conn, "pay", msg, "err", err)
+			slog.Error("msg", "con", req.Conn, "pay", msg, "err", err)
 			return nil, status.Error(codes.Unknown, err.Error())
 		}
 	}
