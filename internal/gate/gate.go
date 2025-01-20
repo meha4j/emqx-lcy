@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
-	"github.com/blabtm/extd/emqx"
-	api "github.com/blabtm/extd/internal/api/gate"
+	"github.com/blabtm/emqx-gate/api"
+	"github.com/blabtm/emqx-gate/vcas"
+	"github.com/blabtm/emqx-go/emqx"
 
-	"github.com/blabtm/extd/vcas"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -18,70 +19,76 @@ import (
 )
 
 func Register(srv *grpc.Server, etc *viper.Viper) error {
+	slog.Info("updating emqx configuration")
+
 	if err := updateGate(etc); err != nil {
-		return fmt.Errorf("update: %v", err)
+		return fmt.Errorf("update: %w", err)
 	}
 
-	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
-		etc.GetString("gate.emqx.host"),
-		etc.GetInt("gate.emqx.auto.adapter.port"),
-	), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	addr := fmt.Sprintf("%s:%d",
+		etc.GetString("emqx.host"),
+		etc.GetInt("extd.gate.emqx.auto.adapter.port"),
+	)
+
+	slog.Info("initializing connection adapter", "addr", addr)
+	con, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	if err != nil {
-		return fmt.Errorf("grpc: %v", err)
+		return fmt.Errorf("grpc: %w", err)
 	}
 
-	cli := api.NewConnectionAdapterClient(con)
+	cli := gate.NewConnectionAdapterClient(con)
 	svc := &service{cli: cli}
 
-	api.RegisterConnectionUnaryHandlerServer(srv, svc)
+	gate.RegisterConnectionUnaryHandlerServer(srv, svc)
 
 	return nil
 }
 
 func updateGate(etc *viper.Viper) error {
-	cli, err := emqx.NewClient(
-		fmt.Sprintf("http://%s:%d/api/v5", etc.GetString("gate.emqx.host"), etc.GetInt("gate.emqx.port")),
-		emqx.WithTimeout(etc.GetString("gate.emqx.timeout")),
-		emqx.WithRetries(etc.GetInt("gate.emqx.retry")),
-		emqx.WithUser(etc.GetString("gate.emqx.user")),
-		emqx.WithPass(etc.GetString("gate.emqx.pass")),
-	)
+	tout, err := time.ParseDuration(etc.GetString("emqx.delay"))
 
 	if err != nil {
-		return fmt.Errorf("emqx: %v", err)
+		return fmt.Errorf("etc: delay: %w", err)
 	}
 
-	if err := cli.UpdateGate(&emqx.GateUpdateRequest{
+	cli, err := emqx.NewClient(
+		emqx.WithHost(etc.GetString("emqx.host")),
+		emqx.WithPort(etc.GetInt("emqx.port")),
+		emqx.WithUser(etc.GetString("extd.gate.emqx.user")),
+		emqx.WithPass(etc.GetString("extd.gate.emqx.pass")),
+		emqx.WithDelay(tout),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	return cli.GatewayUpdate(ctx, &emqx.ExProtoGateway{
 		Name:    "exproto",
-		Enable:  etc.GetBool("gate.emqx.auto.enable"),
-		Timeout: etc.GetString("gate.emqx.auto.timeout"),
-		Server: emqx.Server{
-			Bind: etc.GetString("gate.emqx.auto.adapter.port"),
+		Enable:  etc.GetBool("extd.gate.emqx.auto.enable"),
+		Timeout: etc.GetString("extd.gate.emqx.auto.timeout"),
+		Server: emqx.ExProtoServer{
+      Bind: ":" + etc.GetString("extd.gate.emqx.auto.adapter.port"),
 		},
-		Handler: emqx.Handler{
-			Addr: "http://" + etc.GetString("gate.addr"),
+		Handler: emqx.ExProtoHandler{
+			Addr: "http://" + etc.GetString("extd.gate.addr"),
 		},
-	}); err != nil {
-		return fmt.Errorf("emqx: %v", err)
-	}
-
-	return nil
+	})
 }
 
 type service struct {
 	dat sync.Map
-	cli api.ConnectionAdapterClient
+	cli gate.ConnectionAdapterClient
 
-	api.UnimplementedConnectionUnaryHandlerServer
+	gate.UnimplementedConnectionUnaryHandlerServer
 }
 
-func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedRequest) (*api.EmptySuccess, error) {
+func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRequest) (*gate.EmptySuccess, error) {
 	slog.Debug("socket created", "con", req.Conninfo.String())
 
-	res, err := s.cli.Authenticate(ctx, &api.AuthenticateRequest{
+	res, err := s.cli.Authenticate(ctx, &gate.AuthenticateRequest{
 		Conn: req.Conn,
-		Clientinfo: &api.ClientInfo{
+		Clientinfo: &gate.ClientInfo{
 			ProtoName: vcas.Name,
 			ProtoVer:  vcas.Version,
 			Clientid:  req.Conn,
@@ -91,14 +98,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedReq
 
 	if err != nil {
 		slog.Error("authn", "con", req.Conninfo.String(), "err", err)
-		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if res.Code != api.ResultCode_SUCCESS {
+	if res.Code != gate.ResultCode_SUCCESS {
 		slog.Error("authn", "con", req.Conninfo.String(), "code", res.Code)
-		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.Message)
 	}
@@ -108,14 +115,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedReq
 	return nil, nil
 }
 
-func (s *service) OnSocketClosed(_ context.Context, req *api.SocketClosedRequest) (*api.EmptySuccess, error) {
+func (s *service) OnSocketClosed(_ context.Context, req *gate.SocketClosedRequest) (*gate.EmptySuccess, error) {
 	slog.Debug("socket closed", "con", req.Conn)
 	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
-func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesRequest) (*api.EmptySuccess, error) {
+func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRequest) (*gate.EmptySuccess, error) {
 	slog.Debug("received bytes", "con", req.Conn, "pay", string(req.Bytes))
 
 	v, ok := s.dat.Load(req.Conn)
@@ -132,11 +139,11 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesReq
 	return nil, nil
 }
 
-func (s *service) OnTimerTimeout(ctx context.Context, req *api.TimerTimeoutRequest) (*api.EmptySuccess, error) {
-	return &api.EmptySuccess{}, nil
+func (s *service) OnTimerTimeout(ctx context.Context, req *gate.TimerTimeoutRequest) (*gate.EmptySuccess, error) {
+	return &gate.EmptySuccess{}, nil
 }
 
-func (s *service) OnReceivedMessages(ctx context.Context, req *api.ReceivedMessagesRequest) (*api.EmptySuccess, error) {
+func (s *service) OnReceivedMessages(ctx context.Context, req *gate.ReceivedMessagesRequest) (*gate.EmptySuccess, error) {
 	c, ok := s.dat.Load(req.Conn)
 
 	if !ok {

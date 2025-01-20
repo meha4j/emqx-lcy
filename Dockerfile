@@ -3,9 +3,8 @@ FROM golang:latest AS builder
 WORKDIR /app
 
 COPY vcas/ ./vcas
-COPY emqx/ ./emqx
-COPY internal/gate/ ./internal/gate/
-COPY internal/api/ ./internal/api/
+COPY api/ ./api
+COPY internal/ ./internal
 COPY cmd/gate/ ./cmd/gate/
 COPY go.mod go.sum .
 

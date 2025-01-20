@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blabtm/extd/internal/api/gate"
-	"github.com/blabtm/extd/vcas"
+	"github.com/blabtm/emqx-gate/api"
+	"github.com/blabtm/emqx-gate/vcas"
 )
 
 type Client struct {
@@ -199,7 +199,7 @@ func (c *Client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error
 	}
 
 	c.pkt.Topic = msg.Topic
-  c.pkt.Value = ""
+	c.pkt.Value = ""
 
 	if err := json.Unmarshal(msg.Payload, &c.pkt); err != nil {
 		return fmt.Errorf("parse: %v", err)
