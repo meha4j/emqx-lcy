@@ -1,7 +1,7 @@
 emqx:
   host: emqx
   port: 18083
-  timeout: 5s
+  delay: 5s
 psql:
   host: psql
   port: 5432

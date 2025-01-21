@@ -25,7 +25,7 @@ func init() {
 	etc.SetDefault("emqx.host", "emqx")
 	etc.SetDefault("emqx.port", 18083)
 	etc.SetDefault("emqx.retry", 5)
-	etc.SetDefault("emqx.timeout", "5s")
+	etc.SetDefault("emqx.delay", "5s")
 	etc.SetDefault("extd.gate.emqx.auto.enable", true)
 	etc.SetDefault("extd.gate.emqx.auto.timeout", "30s")
 	etc.SetDefault("extd.gate.emqx.auto.adapter.port", 9100)

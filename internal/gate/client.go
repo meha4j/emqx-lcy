@@ -11,58 +11,57 @@ import (
 	"github.com/blabtm/emqx-gate/vcas"
 )
 
-type Client struct {
-	Conn string
-
-	obs string
-	buf []byte
-	pkt vcas.Packet
-	mux sync.Mutex
-
-	cli gate.ConnectionAdapterClient
+type client struct {
+	conn string
+	obs  string
+	buf  []byte
+	pkt  vcas.Packet
+	mux  sync.Mutex
+	now  func() time.Time
+	cli  gate.ConnectionAdapterClient
 }
 
-func NewClient(conn string, cli gate.ConnectionAdapterClient) *Client {
-	return &Client{
-		Conn: conn,
-
-		cli: cli,
-		buf: make([]byte, 0, 0xff),
+func newClient(conn string, cli gate.ConnectionAdapterClient) *client {
+	return &client{
+		conn: conn,
+		buf:  make([]byte, 0, 0xff),
+		now:  time.Now,
+		cli:  cli,
 	}
 }
 
-func (c *Client) OnReceivedBytes(ctx context.Context, msg []byte) error {
-	c.mux.Lock()
-	defer c.mux.Unlock()
+func (cli *client) OnReceivedBytes(ctx context.Context, msg []byte) error {
+	cli.mux.Lock()
+	defer cli.mux.Unlock()
 
 	for _, b := range msg {
 		if b != 10 {
-			c.buf = append(c.buf, b)
+			cli.buf = append(cli.buf, b)
 			continue
 		}
 
-		c.pkt.Stamp.Time = time.Now()
+		cli.pkt.Stamp.Time = cli.now()
 
-		if err := c.pkt.Unmarshal(c.buf); err != nil {
-			return fmt.Errorf("vcas: %v", err)
+		if err := cli.pkt.Unmarshal(cli.buf); err != nil {
+			return fmt.Errorf("vcas: %w", err)
 		}
 
-		if err := c.handlePacket(ctx, &c.pkt); err != nil {
+		if err := cli.handlePacket(ctx, &cli.pkt); err != nil {
 			return err
 		}
 
-		if cap(c.buf) > 0xff {
-			c.buf = make([]byte, 0, 0xff)
+		if cap(cli.buf) > 0xff {
+			cli.buf = make([]byte, 0, 0xff)
 		} else {
-			c.buf = c.buf[:0]
+			cli.buf = cli.buf[:0]
 		}
 	}
 
 	return nil
 }
 
-func (c *Client) handlePacket(ctx context.Context, pkt *vcas.Packet) error {
-	if c.obs != "" {
+func (cli *client) handlePacket(ctx context.Context, pkt *vcas.Packet) error {
+	if cli.obs != "" {
 		return nil
 	}
 
@@ -70,21 +69,21 @@ func (c *Client) handlePacket(ctx context.Context, pkt *vcas.Packet) error {
 		return fmt.Errorf("unknown topic")
 	}
 
-	switch c.pkt.Method {
+	switch cli.pkt.Method {
 	case vcas.PUB:
-		if err := c.publish(ctx, &c.pkt); err != nil {
+		if err := cli.publish(ctx, &cli.pkt); err != nil {
 			return fmt.Errorf("pub: %v", err)
 		}
 	case vcas.SUB:
-		if err := c.subscribe(ctx, c.pkt.Topic); err != nil {
+		if err := cli.subscribe(ctx, cli.pkt.Topic); err != nil {
 			return fmt.Errorf("sub: %v", err)
 		}
 	case vcas.USB:
-		if err := c.unsubscribe(ctx, c.pkt.Topic); err != nil {
+		if err := cli.unsubscribe(ctx, cli.pkt.Topic); err != nil {
 			return fmt.Errorf("usub: %v", err)
 		}
 	case vcas.GET:
-		if err := c.get(ctx, c.pkt.Topic); err != nil {
+		if err := cli.get(ctx, cli.pkt.Topic); err != nil {
 			return fmt.Errorf("get: %v", err)
 		}
 	default:
@@ -94,143 +93,143 @@ func (c *Client) handlePacket(ctx context.Context, pkt *vcas.Packet) error {
 	return nil
 }
 
-func (c *Client) publish(ctx context.Context, pkt *vcas.Packet) error {
+func (cli *client) publish(ctx context.Context, pkt *vcas.Packet) error {
 	pay, err := json.Marshal(pkt)
 
 	if err != nil {
-		return fmt.Errorf("marshal: %v", err)
+		return fmt.Errorf("json: %w", err)
 	}
 
-	res, err := c.cli.Publish(ctx, &gate.PublishRequest{
-		Conn:    c.Conn,
+	res, err := cli.cli.Publish(ctx, &gate.PublishRequest{
+		Conn:    cli.conn,
 		Topic:   pkt.Topic,
 		Qos:     0,
 		Payload: pay,
 	})
 
 	if err != nil {
-		return fmt.Errorf("cli: %v", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
 	if res.Code != gate.ResultCode_SUCCESS {
-		return fmt.Errorf("req: %v", res.Message)
+		return fmt.Errorf("cli: %v", res.Message)
 	}
 
 	return nil
 }
 
-func (c *Client) subscribe(ctx context.Context, top string) error {
-	res, err := c.cli.Subscribe(ctx, &gate.SubscribeRequest{
-		Conn:  c.Conn,
+func (cli *client) subscribe(ctx context.Context, top string) error {
+	res, err := cli.cli.Subscribe(ctx, &gate.SubscribeRequest{
+		Conn:  cli.conn,
 		Topic: top,
 		Qos:   2,
 	})
 
 	if err != nil {
-		return fmt.Errorf("cli: %v", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
 	if res.Code != gate.ResultCode_SUCCESS {
-		return fmt.Errorf("req: %v", res.Message)
+		return fmt.Errorf("cli: %v", res.Message)
 	}
 
 	return nil
 }
 
-func (c *Client) unsubscribe(ctx context.Context, top string) error {
-	res, err := c.cli.Unsubscribe(ctx, &gate.UnsubscribeRequest{
-		Conn:  c.Conn,
+func (cli *client) unsubscribe(ctx context.Context, top string) error {
+	res, err := cli.cli.Unsubscribe(ctx, &gate.UnsubscribeRequest{
+		Conn:  cli.conn,
 		Topic: top,
 	})
 
 	if err != nil {
-		return fmt.Errorf("cli: %v", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
 	if res.Code != gate.ResultCode_SUCCESS {
-		return fmt.Errorf("req: %v", res.Message)
+		return fmt.Errorf("cli: %v", res.Message)
 	}
 
 	return nil
 }
 
-func (c *Client) get(ctx context.Context, top string) error {
-	err := c.subscribe(ctx, top)
+func (cli *client) get(ctx context.Context, top string) error {
+	err := cli.subscribe(ctx, top)
 
 	if err != nil {
-		return fmt.Errorf("sub: %v", err)
+		return fmt.Errorf("sub: %w", err)
 	}
 
-	c.obs = top
+	cli.obs = top
 
 	time.AfterFunc(5*time.Second, func() {
-		c.mux.Lock()
-		defer c.mux.Unlock()
+		cli.mux.Lock()
+		defer cli.mux.Unlock()
 
-		if c.obs != "" {
-			c.pkt.Topic = c.obs
-			c.pkt.Stamp.Time = time.Now()
-			c.pkt.Value = ""
+		if cli.obs != "" {
+			cli.pkt.Topic = cli.obs
+			cli.pkt.Stamp.Time = cli.now()
+			cli.pkt.Value = ""
 
-			c.unsubscribe(context.Background(), c.obs)
-			c.send(context.Background(), &c.pkt)
+      _ = cli.unsubscribe(context.Background(), cli.obs)
+			_ = cli.send(context.Background(), &cli.pkt)
 
-			c.obs = ""
+			cli.obs = ""
 		}
 	})
 
 	return nil
 }
 
-func (c *Client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error {
-	c.mux.Lock()
-	defer c.mux.Unlock()
+func (cli *client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error {
+	cli.mux.Lock()
+	defer cli.mux.Unlock()
 
-	if c.obs != "" {
-		if c.obs != msg.Topic {
+	if cli.obs != "" {
+		if cli.obs != msg.Topic {
 			return nil
 		}
 
-		c.obs = ""
+		cli.obs = ""
 
-		if err := c.unsubscribe(ctx, msg.Topic); err != nil {
-			return fmt.Errorf("usb: %v", err)
+		if err := cli.unsubscribe(ctx, msg.Topic); err != nil {
+			return fmt.Errorf("usub: %w", err)
 		}
 	}
 
-	c.pkt.Topic = msg.Topic
-	c.pkt.Value = ""
+	cli.pkt.Topic = msg.Topic
+	cli.pkt.Value = ""
 
-	if err := json.Unmarshal(msg.Payload, &c.pkt); err != nil {
-		return fmt.Errorf("parse: %v", err)
+	if err := json.Unmarshal(msg.Payload, &cli.pkt); err != nil {
+		return fmt.Errorf("json: %w", err)
 	}
 
-	if err := c.send(ctx, &c.pkt); err != nil {
-		return fmt.Errorf("send: %v", err)
+	if err := cli.send(ctx, &cli.pkt); err != nil {
+		return fmt.Errorf("send: %w", err)
 	}
 
 	return nil
 }
 
-func (c *Client) send(ctx context.Context, pkt *vcas.Packet) error {
+func (cli *client) send(ctx context.Context, pkt *vcas.Packet) error {
 	pkt.Method = vcas.PUB
 	pay, err := pkt.Marshal(make([]byte, 0))
 
 	if err != nil {
-		return fmt.Errorf("marshal: %v", err)
+		return fmt.Errorf("vcas: %w", err)
 	}
 
-	res, err := c.cli.Send(ctx, &gate.SendBytesRequest{
-		Conn:  c.Conn,
+	res, err := cli.cli.Send(ctx, &gate.SendBytesRequest{
+		Conn:  cli.conn,
 		Bytes: pay,
 	})
 
 	if err != nil {
-		return fmt.Errorf("cli: %v", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
 	if res.Code != gate.ResultCode_SUCCESS {
-		return fmt.Errorf("req: %v", res.Message)
+		return fmt.Errorf("cli: %v", res.Message)
 	}
 
 	return nil

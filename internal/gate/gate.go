@@ -19,19 +19,14 @@ import (
 )
 
 func Register(srv *grpc.Server, etc *viper.Viper) error {
-	slog.Info("updating emqx configuration")
-
 	if err := updateGate(etc); err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
 
-	addr := fmt.Sprintf("%s:%d",
+	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
 		etc.GetString("emqx.host"),
 		etc.GetInt("extd.gate.emqx.auto.adapter.port"),
-	)
-
-	slog.Info("initializing connection adapter", "addr", addr)
-	con, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	), grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	if err != nil {
 		return fmt.Errorf("grpc: %w", err)
@@ -68,7 +63,7 @@ func updateGate(etc *viper.Viper) error {
 		Enable:  etc.GetBool("extd.gate.emqx.auto.enable"),
 		Timeout: etc.GetString("extd.gate.emqx.auto.timeout"),
 		Server: emqx.ExProtoServer{
-      Bind: ":" + etc.GetString("extd.gate.emqx.auto.adapter.port"),
+			Bind: ":" + etc.GetString("extd.gate.emqx.auto.adapter.port"),
 		},
 		Handler: emqx.ExProtoHandler{
 			Addr: "http://" + etc.GetString("extd.gate.addr"),
@@ -84,8 +79,6 @@ type service struct {
 }
 
 func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRequest) (*gate.EmptySuccess, error) {
-	slog.Debug("socket created", "con", req.Conninfo.String())
-
 	res, err := s.cli.Authenticate(ctx, &gate.AuthenticateRequest{
 		Conn: req.Conn,
 		Clientinfo: &gate.ClientInfo{
@@ -110,28 +103,25 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 		return nil, status.Error(codes.Unauthenticated, res.Message)
 	}
 
-	s.dat.Store(req.Conn, NewClient(req.Conn, s.cli))
+	s.dat.Store(req.Conn, newClient(req.Conn, s.cli))
 
 	return nil, nil
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *gate.SocketClosedRequest) (*gate.EmptySuccess, error) {
-	slog.Debug("socket closed", "con", req.Conn)
 	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
 func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRequest) (*gate.EmptySuccess, error) {
-	slog.Debug("received bytes", "con", req.Conn, "pay", string(req.Bytes))
-
 	v, ok := s.dat.Load(req.Conn)
 
 	if !ok {
 		return nil, nil
 	}
 
-	if err := v.(*Client).OnReceivedBytes(ctx, req.Bytes); err != nil {
+	if err := v.(*client).OnReceivedBytes(ctx, req.Bytes); err != nil {
 		slog.Error("bytes", "con", req.Conn, "pay", string(req.Bytes), "err", err)
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
@@ -151,9 +141,7 @@ func (s *service) OnReceivedMessages(ctx context.Context, req *gate.ReceivedMess
 	}
 
 	for _, msg := range req.Messages {
-		slog.Debug("received message", "con", req.Conn, "pay", msg)
-
-		if err := c.(*Client).OnReceivedMessage(ctx, msg); err != nil {
+		if err := c.(*client).OnReceivedMessage(ctx, msg); err != nil {
 			slog.Error("msg", "con", req.Conn, "pay", msg, "err", err)
 			return nil, status.Error(codes.Unknown, err.Error())
 		}
