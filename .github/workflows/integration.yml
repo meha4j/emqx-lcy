@@ -1,0 +1,15 @@
+name: Integrate EMQX Gateway
+on:
+  push:
+    branches:
+      - trunk
+jobs:
+  build:
+    runs-on:
+      group: hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - run: go mod download
+      - run: go test -race .
+
