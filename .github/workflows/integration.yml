@@ -4,12 +4,14 @@ on:
     branches:
       - trunk
 jobs:
-  build:
+  test:
     runs-on:
       group: hosted
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-      - run: go mod download
-      - run: go test .
+      - name: Download Dependencies
+        run: go mod download
+      - name: Run Unit Tests
+        run: go test ./...
 
