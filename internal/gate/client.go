@@ -171,7 +171,7 @@ func (cli *client) get(ctx context.Context, top string) error {
 			cli.pkt.Stamp.Time = cli.now()
 			cli.pkt.Value = ""
 
-      _ = cli.unsubscribe(context.Background(), cli.obs)
+			_ = cli.unsubscribe(context.Background(), cli.obs)
 			_ = cli.send(context.Background(), &cli.pkt)
 
 			cli.obs = ""

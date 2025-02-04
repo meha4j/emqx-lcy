@@ -5,27 +5,30 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/blabtm/emqx-gate/api"
 	"github.com/blabtm/emqx-gate/vcas"
-	"github.com/blabtm/emqx-go/emqx"
 
-	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
-func Register(srv *grpc.Server, etc *viper.Viper) error {
-	if err := updateGate(etc); err != nil {
-		return fmt.Errorf("update: %w", err)
-	}
+type Config struct {
+	Port int
+	Emqx struct {
+		Adapter struct {
+			Host string
+			Port int
+		} `mapstructure:"adapter"`
+	} `mapstructure:"emqx"`
+}
 
+func Register(srv *grpc.Server, cfg *Config) error {
 	con, err := grpc.NewClient(fmt.Sprintf("%s:%d",
-		etc.GetString("emqx.host"),
-		etc.GetInt("extd.gate.emqx.auto.adapter.port"),
+		cfg.Emqx.Adapter.Host,
+		cfg.Emqx.Adapter.Port,
 	), grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	if err != nil {
@@ -38,37 +41,6 @@ func Register(srv *grpc.Server, etc *viper.Viper) error {
 	gate.RegisterConnectionUnaryHandlerServer(srv, svc)
 
 	return nil
-}
-
-func updateGate(etc *viper.Viper) error {
-	tout, err := time.ParseDuration(etc.GetString("emqx.delay"))
-
-	if err != nil {
-		return fmt.Errorf("etc: delay: %w", err)
-	}
-
-	cli, err := emqx.NewClient(
-		emqx.WithHost(etc.GetString("emqx.host")),
-		emqx.WithPort(etc.GetInt("emqx.port")),
-		emqx.WithUser(etc.GetString("extd.gate.emqx.user")),
-		emqx.WithPass(etc.GetString("extd.gate.emqx.pass")),
-		emqx.WithDelay(tout),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	return cli.GatewayUpdate(ctx, &emqx.ExProtoGateway{
-		Name:    "exproto",
-		Enable:  etc.GetBool("extd.gate.emqx.auto.enable"),
-		Timeout: etc.GetString("extd.gate.emqx.auto.timeout"),
-		Server: emqx.ExProtoServer{
-			Bind: ":" + etc.GetString("extd.gate.emqx.auto.adapter.port"),
-		},
-		Handler: emqx.ExProtoHandler{
-			Addr: "http://" + etc.GetString("extd.gate.addr"),
-		},
-	})
 }
 
 type service struct {
