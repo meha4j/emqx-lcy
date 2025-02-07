@@ -5,7 +5,7 @@ WORKDIR /app
 COPY vcas/ ./vcas
 COPY api/ ./api
 COPY internal/ ./internal
-COPY go.mod go.sum main.go .
+COPY go.mod go.sum main.go ./
 
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -o /cmd .
