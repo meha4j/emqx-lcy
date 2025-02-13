@@ -19,4 +19,4 @@ COPY --from=builder /cmd /
 ENV TZ="Asia/Novosibirsk"
 EXPOSE 9001
 
-CMD /cmd
+CMD ["/cmd"]

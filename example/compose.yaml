@@ -1,0 +1,22 @@
+networks:
+  stage:
+    name: stage
+    driver: bridge
+
+services:
+  emqx:
+    image: ghcr.io/blabtm/emqx:latest
+    ports:
+      - 1883:1883
+      - 18083:18083
+      - 20041:20041
+    networks:
+      - stage
+  emqx-gate:
+    image: ghcr.io/blabtm/emqx-gate:latest
+    environment:
+      PORT: 9001
+      EMQX_ADAPTER_HOST: emqx
+      EMQX_ADAPTER_PORT: 9100
+    networks:
+      - stage
