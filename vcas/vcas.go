@@ -90,7 +90,7 @@ func (t *Time) UnmarshalJSON(json []byte) error {
 	milli, err := strconv.ParseInt(string(json), 10, 64)
 
 	if err != nil {
-		return fmt.Errorf("format: %v", err)
+		return fmt.Errorf("format: %w", err)
 	}
 
 	t.Time = time.UnixMilli(milli)
@@ -106,34 +106,34 @@ type Packet struct {
 }
 
 func (pkt *Packet) Marshal(pay []byte) ([]byte, error) {
-  if pkt.Topic == "" {
-    return nil, fmt.Errorf("topic: not found")
-  }
+	if pkt.Topic == "" {
+		return nil, fmt.Errorf("topic: not found")
+	}
 
-  if pkt.Value == "" {
-    pkt.Value = "none"
-  }
+	if pkt.Value == "" {
+		pkt.Value = "none"
+	}
 
 	buf := bytes.NewBuffer(pay)
 
-  buf.Grow(63 + len(pkt.Topic) + len(pkt.Value))
+	buf.Grow(63 + len(pkt.Topic) + len(pkt.Value))
 	buf.WriteString("time:")
 
 	if err := pkt.Stamp.marshal(buf); err != nil {
-		return nil, fmt.Errorf("time: %v", err)
+		return nil, fmt.Errorf("time: %w", err)
 	}
 
 	buf.WriteString("|method:")
 
 	if err := pkt.Method.marshal(buf); err != nil {
-		return nil, fmt.Errorf("method: %v", err)
+		return nil, fmt.Errorf("method: %w", err)
 	}
 
 	buf.WriteString("|name:")
 	buf.WriteString(pkt.Topic)
 	buf.WriteString("|val:")
 	buf.WriteString(pkt.Value)
-  buf.WriteString("|descr:none|type:rw|units:none\n")
+	buf.WriteString("|descr:none|type:rw|units:none\n")
 
 	return buf.Bytes(), nil
 }
@@ -152,11 +152,11 @@ func (pkt *Packet) Unmarshal(pay []byte) error {
 		switch k {
 		case "method", "meth", "m":
 			if err := pkt.Method.unmarshal(v); err != nil {
-				return fmt.Errorf("method: %v", err)
+				return fmt.Errorf("method: %w", err)
 			}
 		case "time", "t":
 			if err := pkt.Stamp.unmarshal(v); err != nil {
-				return fmt.Errorf("time: %v", err)
+				return fmt.Errorf("time: %w", err)
 			}
 		case "name", "n":
 			pkt.Topic = string(v)
@@ -165,9 +165,9 @@ func (pkt *Packet) Unmarshal(pay []byte) error {
 		}
 	}
 
-  if pkt.Value == "none" {
-    pkt.Value = ""
-  }
+	if pkt.Value == "none" {
+		pkt.Value = ""
+	}
 
 	return nil
 }
