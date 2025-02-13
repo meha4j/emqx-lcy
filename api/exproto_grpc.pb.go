@@ -20,7 +20,7 @@
 // - protoc             v5.29.2
 // source: api/gate/exproto.proto
 
-package gate
+package api
 
 import (
 	context "context"

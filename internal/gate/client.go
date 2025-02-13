@@ -18,10 +18,10 @@ type client struct {
 	pkt  vcas.Packet
 	mux  sync.Mutex
 	now  func() time.Time
-	cli  gate.ConnectionAdapterClient
+	cli  api.ConnectionAdapterClient
 }
 
-func newClient(conn string, cli gate.ConnectionAdapterClient) *client {
+func newClient(conn string, cli api.ConnectionAdapterClient) *client {
 	return &client{
 		conn: conn,
 		buf:  make([]byte, 0, 0xff),
@@ -100,7 +100,7 @@ func (cli *client) publish(ctx context.Context, pkt *vcas.Packet) error {
 		return fmt.Errorf("json: %w", err)
 	}
 
-	res, err := cli.cli.Publish(ctx, &gate.PublishRequest{
+	res, err := cli.cli.Publish(ctx, &api.PublishRequest{
 		Conn:    cli.conn,
 		Topic:   pkt.Topic,
 		Qos:     0,
@@ -111,7 +111,7 @@ func (cli *client) publish(ctx context.Context, pkt *vcas.Packet) error {
 		return fmt.Errorf("cli: %w", err)
 	}
 
-	if res.Code != gate.ResultCode_SUCCESS {
+	if res.Code != api.ResultCode_SUCCESS {
 		return fmt.Errorf("cli: %v", res.Message)
 	}
 
@@ -119,7 +119,7 @@ func (cli *client) publish(ctx context.Context, pkt *vcas.Packet) error {
 }
 
 func (cli *client) subscribe(ctx context.Context, top string) error {
-	res, err := cli.cli.Subscribe(ctx, &gate.SubscribeRequest{
+	res, err := cli.cli.Subscribe(ctx, &api.SubscribeRequest{
 		Conn:  cli.conn,
 		Topic: top,
 		Qos:   2,
@@ -129,7 +129,7 @@ func (cli *client) subscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("cli: %w", err)
 	}
 
-	if res.Code != gate.ResultCode_SUCCESS {
+	if res.Code != api.ResultCode_SUCCESS {
 		return fmt.Errorf("cli: %v", res.Message)
 	}
 
@@ -137,7 +137,7 @@ func (cli *client) subscribe(ctx context.Context, top string) error {
 }
 
 func (cli *client) unsubscribe(ctx context.Context, top string) error {
-	res, err := cli.cli.Unsubscribe(ctx, &gate.UnsubscribeRequest{
+	res, err := cli.cli.Unsubscribe(ctx, &api.UnsubscribeRequest{
 		Conn:  cli.conn,
 		Topic: top,
 	})
@@ -146,7 +146,7 @@ func (cli *client) unsubscribe(ctx context.Context, top string) error {
 		return fmt.Errorf("cli: %w", err)
 	}
 
-	if res.Code != gate.ResultCode_SUCCESS {
+	if res.Code != api.ResultCode_SUCCESS {
 		return fmt.Errorf("cli: %v", res.Message)
 	}
 
@@ -181,7 +181,7 @@ func (cli *client) get(ctx context.Context, top string) error {
 	return nil
 }
 
-func (cli *client) OnReceivedMessage(ctx context.Context, msg *gate.Message) error {
+func (cli *client) OnReceivedMessage(ctx context.Context, msg *api.Message) error {
 	cli.mux.Lock()
 	defer cli.mux.Unlock()
 
@@ -219,7 +219,7 @@ func (cli *client) send(ctx context.Context, pkt *vcas.Packet) error {
 		return fmt.Errorf("vcas: %w", err)
 	}
 
-	res, err := cli.cli.Send(ctx, &gate.SendBytesRequest{
+	res, err := cli.cli.Send(ctx, &api.SendBytesRequest{
 		Conn:  cli.conn,
 		Bytes: pay,
 	})
@@ -228,7 +228,7 @@ func (cli *client) send(ctx context.Context, pkt *vcas.Packet) error {
 		return fmt.Errorf("cli: %w", err)
 	}
 
-	if res.Code != gate.ResultCode_SUCCESS {
+	if res.Code != api.ResultCode_SUCCESS {
 		return fmt.Errorf("cli: %v", res.Message)
 	}
 

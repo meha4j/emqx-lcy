@@ -35,25 +35,25 @@ func Register(srv *grpc.Server, cfg *Config) error {
 		return fmt.Errorf("grpc: %w", err)
 	}
 
-	cli := gate.NewConnectionAdapterClient(con)
+	cli := api.NewConnectionAdapterClient(con)
 	svc := &service{cli: cli}
 
-	gate.RegisterConnectionUnaryHandlerServer(srv, svc)
+	api.RegisterConnectionUnaryHandlerServer(srv, svc)
 
 	return nil
 }
 
 type service struct {
 	dat sync.Map
-	cli gate.ConnectionAdapterClient
+	cli api.ConnectionAdapterClient
 
-	gate.UnimplementedConnectionUnaryHandlerServer
+	api.UnimplementedConnectionUnaryHandlerServer
 }
 
-func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRequest) (*gate.EmptySuccess, error) {
-	res, err := s.cli.Authenticate(ctx, &gate.AuthenticateRequest{
+func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedRequest) (*api.EmptySuccess, error) {
+	res, err := s.cli.Authenticate(ctx, &api.AuthenticateRequest{
 		Conn: req.Conn,
-		Clientinfo: &gate.ClientInfo{
+		Clientinfo: &api.ClientInfo{
 			ProtoName: vcas.Name,
 			ProtoVer:  vcas.Version,
 			Clientid:  req.Conn,
@@ -63,14 +63,14 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 
 	if err != nil {
 		slog.Error("authn", "con", req.Conninfo.String(), "err", err)
-		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if res.Code != gate.ResultCode_SUCCESS {
+	if res.Code != api.ResultCode_SUCCESS {
 		slog.Error("authn", "con", req.Conninfo.String(), "code", res.Code)
-		s.cli.Close(ctx, &gate.CloseSocketRequest{Conn: req.Conn})
+		s.cli.Close(ctx, &api.CloseSocketRequest{Conn: req.Conn})
 
 		return nil, status.Error(codes.Unauthenticated, res.Message)
 	}
@@ -80,13 +80,13 @@ func (s *service) OnSocketCreated(ctx context.Context, req *gate.SocketCreatedRe
 	return nil, nil
 }
 
-func (s *service) OnSocketClosed(_ context.Context, req *gate.SocketClosedRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnSocketClosed(_ context.Context, req *api.SocketClosedRequest) (*api.EmptySuccess, error) {
 	s.dat.Delete(req.Conn)
 
 	return nil, nil
 }
 
-func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesRequest) (*api.EmptySuccess, error) {
 	v, ok := s.dat.Load(req.Conn)
 
 	if !ok {
@@ -101,11 +101,11 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *gate.ReceivedBytesRe
 	return nil, nil
 }
 
-func (s *service) OnTimerTimeout(ctx context.Context, req *gate.TimerTimeoutRequest) (*gate.EmptySuccess, error) {
-	return &gate.EmptySuccess{}, nil
+func (s *service) OnTimerTimeout(ctx context.Context, req *api.TimerTimeoutRequest) (*api.EmptySuccess, error) {
+	return &api.EmptySuccess{}, nil
 }
 
-func (s *service) OnReceivedMessages(ctx context.Context, req *gate.ReceivedMessagesRequest) (*gate.EmptySuccess, error) {
+func (s *service) OnReceivedMessages(ctx context.Context, req *api.ReceivedMessagesRequest) (*api.EmptySuccess, error) {
 	c, ok := s.dat.Load(req.Conn)
 
 	if !ok {
