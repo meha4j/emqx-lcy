@@ -77,13 +77,13 @@ func (s *service) OnSocketCreated(ctx context.Context, req *api.SocketCreatedReq
 
 	s.dat.Store(req.Conn, newClient(req.Conn, s.cli))
 
-	return nil, nil
+	return &api.EmptySuccess{}, nil
 }
 
 func (s *service) OnSocketClosed(_ context.Context, req *api.SocketClosedRequest) (*api.EmptySuccess, error) {
 	s.dat.Delete(req.Conn)
 
-	return nil, nil
+	return &api.EmptySuccess{}, nil
 }
 
 func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesRequest) (*api.EmptySuccess, error) {
@@ -98,7 +98,7 @@ func (s *service) OnReceivedBytes(ctx context.Context, req *api.ReceivedBytesReq
 		return nil, status.Error(codes.Unknown, err.Error())
 	}
 
-	return nil, nil
+	return &api.EmptySuccess{}, nil
 }
 
 func (s *service) OnTimerTimeout(ctx context.Context, req *api.TimerTimeoutRequest) (*api.EmptySuccess, error) {
@@ -119,5 +119,5 @@ func (s *service) OnReceivedMessages(ctx context.Context, req *api.ReceivedMessa
 		}
 	}
 
-	return nil, nil
+	return &api.EmptySuccess{}, nil
 }
