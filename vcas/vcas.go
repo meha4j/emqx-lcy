@@ -100,7 +100,7 @@ func (t *Time) UnmarshalJSON(json []byte) error {
 
 type Packet struct {
 	Method Method `json:"-"`
-	Stamp  Time   `json:"stamp"`
+	Stamp  Time   `json:"timestamp"`
 	Topic  string `json:"-"`
 	Value  string `json:"value,omitempty"`
 }
