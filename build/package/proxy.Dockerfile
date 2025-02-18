@@ -1,11 +1,9 @@
-FROM golang:1.24.0-alpine3.21 AS build
+FROM haproxy:alpine
+USER root
 
-COPY scripts/bootstrap.go .
-RUN GOOS=linux go build -o /bootstrap bootstrap.go
-
-FROM haproxy:3.1.3-alpine3.21
+RUN apk --no-cache add curl
 
 COPY configs/haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
-COPY --from=build /bootstrap /
+COPY scripts/bootstrap.sh /bootstrap
 
-CMD ["/bootstrap"]
+CMD [ "sh", "/bootstrap" ]

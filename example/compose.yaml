@@ -1,14 +1,11 @@
 networks:
   stage:
     name: stage
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
+    external: true
 
-volumes:
-  emqx-data:
-    name: emqx-data
+secrets:
+  emqx-rest:
+    external: true
 
 services:
   emqx:
@@ -17,10 +14,14 @@ services:
       - 1883:1883
       - 18083:18083
       - 20041:20041
+    environment:
+      EMQX_API_KEY__BOOTSTRAP_FILE: /etc/secret.cfg
     networks:
       - stage
-    volumes:
-      - emqx-data:/opt/emqx/data
+    secrets:
+      - source: emqx-rest
+        target: /etc/secret.cfg
+
   emqx-gate-node:
     image: ghcr.io/blabtm/emqx-gate:latest
     environment:
@@ -30,9 +31,10 @@ services:
     networks:
       - stage
     deploy:
+      mode: replicated
+      replicas: 2
       endpoint_mode: dnsrr
-    depends_on:
-      - emqx
+
   emqx-gate:
     image: ghcr.io/blabtm/emqx-gate-proxy:latest
     ports:
@@ -45,10 +47,7 @@ services:
       EMQX_HOST: emqx
       EMQX_PORT: 18083
       EMQX_ADAPTER_PORT: 9100
-      EMQX_USER: bc2a235f2e2cb06b
-      EMQX_PASS: zqPqyKfrZWXyFIXdUXYUV6jaaDvbG17EswGKzeYhUaN
+      EMQX_USER: gate
+      EMQX_PASS: pass
     networks:
       - stage
-    depends_on:
-      - emqx-gate-node
-      - emqx
